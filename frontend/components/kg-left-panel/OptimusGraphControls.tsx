@@ -33,9 +33,9 @@ import { ScrollArea } from '../ui/scroll-area';
 import { Spinner } from '../ui/spinner';
 
 export function OptimusGraphControls() {
-  const MAX_RADIUS = 10;
-  const MAX_NODES = 4000;
-  const MAX_DEGREE_LIMIT = 25;
+  const MAX_RADIUS = 15;
+  const MAX_NODES = 5000;
+  const MAX_DEGREE_LIMIT = 35;
   const sigmaInstance = useKGStore((state) => state.sigmaInstance);
   const selectedNodes = useKGStore((state) => state.selectedNodes);
   const [collapsed, setCollapsed] = React.useState(false);
@@ -45,12 +45,16 @@ export function OptimusGraphControls() {
   const [searchQuery, setSearchQuery] = React.useState('');
   const [searchLoading, setSearchLoading] = React.useState(false);
   const [searchResults, setSearchResults] = React.useState<OptimusSearchResult[]>([]);
-  const [radius, setRadius] = React.useState('2');
-  const [maxNodes, setMaxNodes] = React.useState('750');
-  const [degreeLimit, setDegreeLimit] = React.useState('15');
+  const [radius, setRadius] = React.useState('10');
+  const [maxNodes, setMaxNodes] = React.useState('3000');
+  const [degreeLimit, setDegreeLimit] = React.useState('25');
   const [pathDepth, setPathDepth] = React.useState('6');
   const [pathSourceId, setPathSourceId] = React.useState('');
   const [pathTargetId, setPathTargetId] = React.useState('');
+  const [pathSourceLoading, setPathSourceLoading] = React.useState(false);
+  const [pathTargetLoading, setPathTargetLoading] = React.useState(false);
+  const [pathSourceResults, setPathSourceResults] = React.useState<OptimusSearchResult[]>([]);
+  const [pathTargetResults, setPathTargetResults] = React.useState<OptimusSearchResult[]>([]);
   const [working, setWorking] = React.useState(false);
 
   React.useEffect(() => {
@@ -115,6 +119,80 @@ export function OptimusGraphControls() {
       window.clearTimeout(timeout);
     };
   }, [searchQuery]);
+
+  React.useEffect(() => {
+    const trimmedQuery = pathSourceId.trim();
+
+    if (trimmedQuery.length < 2) {
+      setPathSourceResults([]);
+      setPathSourceLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    const timeout = window.setTimeout(() => {
+      setPathSourceLoading(true);
+      searchOptimusNodes(trimmedQuery, 8)
+        .then((results) => {
+          if (!cancelled) {
+            setPathSourceResults(results);
+          }
+        })
+        .catch((error) => {
+          console.error(error);
+          if (!cancelled) {
+            setPathSourceResults([]);
+          }
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setPathSourceLoading(false);
+          }
+        });
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+    };
+  }, [pathSourceId]);
+
+  React.useEffect(() => {
+    const trimmedQuery = pathTargetId.trim();
+
+    if (trimmedQuery.length < 2) {
+      setPathTargetResults([]);
+      setPathTargetLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    const timeout = window.setTimeout(() => {
+      setPathTargetLoading(true);
+      searchOptimusNodes(trimmedQuery, 8)
+        .then((results) => {
+          if (!cancelled) {
+            setPathTargetResults(results);
+          }
+        })
+        .catch((error) => {
+          console.error(error);
+          if (!cancelled) {
+            setPathTargetResults([]);
+          }
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setPathTargetLoading(false);
+          }
+        });
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+    };
+  }, [pathTargetId]);
 
   const parsedRadius = React.useMemo(
     () => Math.min(MAX_RADIUS, Math.max(1, Number.parseInt(radius, 10) || 1)),
@@ -225,11 +303,6 @@ export function OptimusGraphControls() {
       return;
     }
 
-    if (selectedNodes.length === 1) {
-      await replaceWithSubgraph(selectedNodes[0]);
-      return;
-    }
-
     await mergeExpansion(selectedNodes);
   }
 
@@ -253,9 +326,38 @@ export function OptimusGraphControls() {
     }
   }
 
+  function highlightNodeInCurrentGraph(nodeId: string) {
+    if (!sigmaInstance) {
+      return false;
+    }
+
+    const graph = sigmaInstance.getGraph();
+    if (!graph.hasNode(nodeId)) {
+      return false;
+    }
+
+    useKGStore.setState({
+      nodeSearchQuery: nodeId,
+      selectedNodes: [nodeId],
+    });
+    sigmaInstance.refresh();
+    return true;
+  }
+
   async function handleSuggestionSelect(result: OptimusSearchResult) {
     setSearchQuery(result.displayName);
+    if (highlightNodeInCurrentGraph(result.id)) {
+      toast.success('Highlighted node in graph', {
+        description: result.displayName,
+      });
+      return;
+    }
+
     await replaceWithSubgraph(result.id);
+    useKGStore.setState({
+      nodeSearchQuery: result.id,
+      selectedNodes: [result.id],
+    });
   }
 
   async function handleRandomLoad() {
@@ -346,6 +448,59 @@ export function OptimusGraphControls() {
 
   async function handleLoadPath() {
     await loadPathBetween(pathSourceId, pathTargetId);
+  }
+
+  function handlePathNodeSelect(field: 'source' | 'target', result: OptimusSearchResult) {
+    if (field === 'source') {
+      setPathSourceId(result.id);
+      setPathSourceResults([]);
+      return;
+    }
+
+    setPathTargetId(result.id);
+    setPathTargetResults([]);
+  }
+
+  function renderPathSearchResults(
+    field: 'source' | 'target',
+    results: OptimusSearchResult[],
+    loading: boolean,
+    currentValue: string,
+  ) {
+    if (currentValue.trim().length < 2) {
+      return null;
+    }
+
+    return (
+      <div className='rounded border border-sky-100 bg-white p-2'>
+        {loading ? (
+          <div className='flex items-center text-[11px] text-slate-500'>
+            <Spinner size='small' />
+            <span className='ml-2'>Searching nodes...</span>
+          </div>
+        ) : results.length > 0 ? (
+          <ScrollArea className='h-24'>
+            <div className='space-y-1 pr-2'>
+              {results.map((result) => (
+                <button
+                  type='button'
+                  key={`${field}-${result.id}`}
+                  className='w-full rounded border border-slate-100 px-2 py-1 text-left text-[11px] transition hover:border-sky-200 hover:bg-sky-50'
+                  onClick={() => handlePathNodeSelect(field, result)}
+                >
+                  <div className='truncate font-medium text-slate-900'>{result.displayName}</div>
+                  <div className='truncate text-slate-500'>
+                    {result.typeName} - {result.id}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </ScrollArea>
+        ) : (
+          <div className='text-[11px] text-slate-500'>No matching nodes found.</div>
+        )}
+      </div>
+    );
   }
 
   return (
@@ -461,24 +616,35 @@ export function OptimusGraphControls() {
         Safety caps: radius {MAX_RADIUS}, max nodes {MAX_NODES.toLocaleString()}, degree limit {MAX_DEGREE_LIMIT}.
       </p>
 
-      <div className='mt-3 grid grid-cols-3 gap-2'>
-        <Button size='sm' className='flex-1 bg-sky-700 hover:bg-sky-800' onClick={handleRandomLoad} disabled={working}>
+      <div className='mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3'>
+        <Button
+          size='sm'
+          className='min-w-0 justify-center bg-sky-700 px-2 text-[11px] hover:bg-sky-800'
+          onClick={handleRandomLoad}
+          disabled={working}
+        >
           <ShuffleIcon className='size-3' />
           Random
         </Button>
         <Button
           size='sm'
           variant='outline'
-          className='flex-1 bg-white'
+          className='min-w-0 justify-center bg-white px-2 text-[11px]'
           onClick={() => void handleExpandSelected()}
           disabled={working || selectedNodes.length === 0}
         >
           <GitBranchPlusIcon className='size-3' />
-          {selectedNodes.length <= 1 ? 'Expand Node' : 'Expand Selected'}
+          Expand
         </Button>
-        <Button size='sm' variant='outline' className='bg-white' onClick={handleClearNetwork} disabled={working}>
+        <Button
+          size='sm'
+          variant='outline'
+          className='min-w-0 justify-center bg-white px-2 text-[11px]'
+          onClick={handleClearNetwork}
+          disabled={working}
+        >
           <Trash2Icon className='size-3' />
-          Clear Network
+          Clear
         </Button>
       </div>
 
@@ -612,18 +778,24 @@ export function OptimusGraphControls() {
           <RouteIcon className='size-3' />
           Shortest Path
         </div>
-        <Input
-          value={pathSourceId}
-          onChange={(e) => setPathSourceId(e.target.value)}
-          placeholder='Source node ID'
-          className='h-8 bg-white text-xs'
-        />
-        <Input
-          value={pathTargetId}
-          onChange={(e) => setPathTargetId(e.target.value)}
-          placeholder='Target node ID'
-          className='h-8 bg-white text-xs'
-        />
+        <div className='space-y-2'>
+          <Input
+            value={pathSourceId}
+            onChange={(e) => setPathSourceId(e.target.value)}
+            placeholder='Search or paste source node ID'
+            className='h-8 bg-white text-xs'
+          />
+          {renderPathSearchResults('source', pathSourceResults, pathSourceLoading, pathSourceId)}
+        </div>
+        <div className='space-y-2'>
+          <Input
+            value={pathTargetId}
+            onChange={(e) => setPathTargetId(e.target.value)}
+            placeholder='Search or paste target node ID'
+            className='h-8 bg-white text-xs'
+          />
+          {renderPathSearchResults('target', pathTargetResults, pathTargetLoading, pathTargetId)}
+        </div>
         <div className='flex gap-2'>
           <Input
             value={pathDepth}

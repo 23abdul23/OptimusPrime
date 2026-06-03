@@ -290,9 +290,37 @@ export function KGGraphEvents({
 
         if (draggedNode) {
           setDraggedNode(null);
-        } else if (clickedNode) {
-          clearClickedNode(clickedNode);
         } else if (clickedEdgeRef.current) {
+          clearEdgeHighlight(
+            graph,
+            clickedEdgeRef.current,
+            highlightedNodesRef.current,
+            clickedNodesRef.current,
+            activePropertyNodeTypes,
+          );
+          clickedEdgeRef.current = null;
+          setClickedEdge(null);
+          sigma.refresh();
+        }
+      },
+
+      clickStage: () => {
+        const selectionHandlers = selectionPluginRef?.current?.getEventHandlers();
+        if (selectionHandlers && dragHappenedRef.current) {
+          dragHappenedRef.current = false;
+          return;
+        }
+
+        if (clickedNode) {
+          clearClickedNode(clickedNode);
+          return;
+        }
+
+        if (clickedNodesRef.current.size > 0) {
+          applyManualSelection([]);
+        }
+
+        if (clickedEdgeRef.current) {
           clearEdgeHighlight(
             graph,
             clickedEdgeRef.current,

@@ -36,6 +36,7 @@ export function NodeTypeLegend() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [activeType, setActiveType] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [currentTypeNodes, setCurrentTypeNodes] = useState<OptimusSearchResult[]>([]);
   const [searchResults, setSearchResults] = useState<OptimusSearchResult[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [loadingNodeId, setLoadingNodeId] = useState<string | null>(null);
@@ -93,15 +94,31 @@ export function NodeTypeLegend() {
   }, [sigmaInstance, refreshNodeTypes]);
 
   useEffect(() => {
+    if (dialogOpen || activeType) {
+      return;
+    }
+
+    setCurrentTypeNodes((prev) => (prev.length === 0 ? prev : []));
+    setSearchResults((prev) => (prev.length === 0 ? prev : []));
+    setSearchLoading(false);
+  }, [dialogOpen, activeType]);
+
+  useEffect(() => {
     if (!dialogOpen || !activeType) {
-      setSearchResults([]);
-      setSearchLoading(false);
       return;
     }
 
     const trimmedQuery = searchQuery.trim();
     if (trimmedQuery.length < 2) {
-      setSearchResults([]);
+      const normalizedQuery = trimmedQuery.toLowerCase();
+      setSearchResults(
+        normalizedQuery.length === 0
+          ? currentTypeNodes
+          : currentTypeNodes.filter((result) => {
+              const haystack = `${result.displayName} ${result.id} ${result.typeName}`.toLowerCase();
+              return haystack.includes(normalizedQuery);
+            }),
+      );
       setSearchLoading(false);
       return;
     }
@@ -132,7 +149,38 @@ export function NodeTypeLegend() {
       cancelled = true;
       window.clearTimeout(timeout);
     };
-  }, [dialogOpen, activeType, searchQuery]);
+  }, [dialogOpen, activeType, currentTypeNodes, searchQuery]);
+
+  const getCurrentTypeNodes = useCallback(
+    (nodeType: string): OptimusSearchResult[] => {
+      const graph = sigmaInstance?.getGraph();
+      if (!graph) {
+        return [];
+      }
+
+      return graph
+        .nodes()
+        .filter((nodeId) => {
+          const nodeAttr = graph.getNodeAttributes(nodeId);
+          return (nodeAttr.nodeType as string) === nodeType;
+        })
+        .map((nodeId) => {
+          const nodeAttr = graph.getNodeAttributes(nodeId);
+          const displayName =
+            typeof nodeAttr.label === 'string' && nodeAttr.label.trim().length > 0 ? nodeAttr.label : nodeId;
+
+          return {
+            id: nodeId,
+            typeCode: nodeType,
+            typeName: nodeType,
+            displayName,
+            matchedOn: ['current graph'],
+          };
+        })
+        .sort((a, b) => a.displayName.localeCompare(b.displayName));
+    },
+    [sigmaInstance],
+  );
 
   const toggleTypeVisibility = (nodeType: string) => {
     const graph = sigmaInstance?.getGraph();
@@ -181,9 +229,11 @@ export function NodeTypeLegend() {
   };
 
   const openTypeBrowser = (nodeType: string) => {
+    const nodesInType = getCurrentTypeNodes(nodeType);
     setActiveType(nodeType);
     setSearchQuery('');
-    setSearchResults([]);
+    setCurrentTypeNodes(nodesInType);
+    setSearchResults(nodesInType);
     setDialogOpen(true);
   };
 
@@ -193,10 +243,30 @@ export function NodeTypeLegend() {
       return;
     }
 
+    const currentGraph = sigmaInstance.getGraph();
+    if (currentGraph.hasNode(result.id)) {
+      useKGStore.setState({
+        nodeSearchQuery: result.id,
+        selectedNodes: [result.id],
+      });
+      sigmaInstance.refresh();
+      setDialogOpen(false);
+      setSearchQuery('');
+      setSearchResults([]);
+      toast.success(`Highlighted ${result.typeName} in graph`, {
+        description: result.displayName,
+      });
+      return;
+    }
+
     setLoadingNodeId(result.id);
     try {
       const payload = await fetchOptimusSubgraph(result.id, optimusQueryOptions);
       await applyOptimusGraph(sigmaInstance, payload, 'replace', [result.id]);
+      useKGStore.setState({
+        nodeSearchQuery: result.id,
+        selectedNodes: [result.id],
+      });
       setDialogOpen(false);
       setSearchQuery('');
       setSearchResults([]);
@@ -351,7 +421,7 @@ export function NodeTypeLegend() {
           <DialogHeader>
             <DialogTitle>{activeType ?? 'Node Type'} Browser</DialogTitle>
             <DialogDescription>
-              Search within the selected node category and load a fresh neighborhood around any result.
+              Current nodes from this category are listed by default. Search to look beyond the loaded graph.
             </DialogDescription>
           </DialogHeader>
 
@@ -369,9 +439,9 @@ export function NodeTypeLegend() {
                   <Spinner size='small' />
                   <span className='ml-2'>Searching {activeType ?? 'nodes'}...</span>
                 </div>
-              ) : searchQuery.trim().length < 2 ? (
+              ) : searchResults.length === 0 && searchQuery.trim().length < 2 ? (
                 <div className='flex h-full items-center justify-center text-sm text-slate-500'>
-                  Type at least 2 characters to search within {activeType ?? 'this category'}.
+                  No nodes from {activeType ?? 'this category'} are loaded in the current graph yet.
                 </div>
               ) : searchResults.length === 0 ? (
                 <div className='flex h-full items-center justify-center text-sm text-slate-500'>
