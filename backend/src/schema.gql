@@ -1,0 +1,157 @@
+# ------------------------------------------------------
+# THIS FILE WAS AUTOMATICALLY GENERATED (DO NOT MODIFY)
+# ------------------------------------------------------
+
+input DataRequired {
+  category: GenePropertyCategoryEnum!
+  diseaseId: String
+  properties: [String!]!
+}
+
+type Description {
+  description: String
+  name: String!
+}
+
+type GeneBase {
+  Description: String
+  Gene_name: String
+  ID: ID!
+}
+
+type GeneInteraction {
+  gene1: String!
+  gene2: String!
+  score: Float!
+  typeScores: JSON
+}
+
+type GeneInteractionOutput {
+  averageClusteringCoefficient: Float
+  genes: [GeneBase!]!
+  graphName: String
+  links: [GeneInteraction!]
+}
+
+type GeneMetadata {
+  Aliases: String
+  Description: String
+  Gene_name: String
+  ID: ID!
+  Input: String!
+  hgnc_gene_id: String
+}
+
+type GeneProperty {
+  ID: ID!
+  data: [GenePropertyData!]!
+}
+
+"""Available categories for gene properties"""
+enum GenePropertyCategoryEnum {
+  DIFFERENTIAL_EXPRESSION
+  DRUGGABILITY
+  GENETICS
+  OPEN_TARGETS
+  OT_PRIORITIZATION
+  PATHWAY
+  TISSUE_EXPRESSION
+}
+
+type GenePropertyData {
+  category: GenePropertyCategoryEnum!
+  diseaseId: String
+  key: String!
+  score: Float!
+}
+
+type Headers {
+  differentialExpression: [Description!]
+  druggability: [Description!]
+  genetics: [Description!]
+  openTargets: [Description!]
+  pathway: [Description!]
+  targetPrioritization: [Description!]
+  tissueSpecificity: [Description!]
+}
+
+input InteractionInput {
+  geneIDs: [String!]!
+  graphName: String
+  interactionType: [String!]!
+  minScore: Float!
+}
+
+"""
+The `JSON` scalar type represents JSON values as specified by [ECMA-404](http://www.ecma-international.org/publications/files/ECMA-ST/ECMA-404.pdf).
+"""
+scalar JSON
+
+"""Available ordering options for target disease association table"""
+enum OrderByEnum {
+  CANCER_BIOMARKERS
+  CANCER_GENE_CENSUS
+  CHEMBL
+  CLINGEN
+  CLINVAR
+  CLINVAR_SOMATIC
+  CRISPR_SCREENS
+  EUROPE_PMC
+  EXPRESSION_ATLAS
+  GEL_PANEL_APP
+  GENE2PHENOTYPE
+  GENE_BURDEN
+  GENE_SIGNATURES
+  GWAS_ASSOCIATIONS
+  IMPC
+  INTOGEN
+  ORPHANET
+  PROGENY
+  PROJECT_SCORE
+  REACTOME
+  SCORE
+  SLAPENRICH
+  UNIPROT_CURATED_VARIANTS
+  UNIPROT_LITERATURE
+}
+
+input Pagination {
+  limit: Int = 25
+  page: Int = 1
+}
+
+type Query {
+  geneProperties(config: [DataRequired!]!, geneIds: [String!]!): [GeneProperty!]!
+  genes(geneIDs: [String!]!): [GeneMetadata!]!
+  getGeneInteractions(input: InteractionInput!, order: Int!): GeneInteractionOutput!
+  headers(diseaseId: String!): Headers!
+  targetDiseaseAssociationTable(diseaseId: String!, geneIds: [String!]!, orderBy: OrderByEnum = SCORE, page: Pagination): TargetDiseaseAssociationTable!
+  targetPrioritizationTable(diseaseId: String!, geneIds: [String!]!, page: Pagination): TargetDiseaseAssociationTable!
+  topGenesByDisease(diseaseId: String!, limit: Int! = 25): [TopGene!]!
+}
+
+type ScoredKeyValue {
+  key: String!
+  score: Float!
+}
+
+type Target {
+  id: ID!
+  name: String!
+  prioritization: [ScoredKeyValue!]!
+}
+
+type TargetDiseaseAssociationRow {
+  datasourceScores: [ScoredKeyValue!]!
+  overall_score: Float!
+  target: Target!
+}
+
+type TargetDiseaseAssociationTable {
+  rows: [TargetDiseaseAssociationRow!]!
+  totalCount: Int
+}
+
+type TopGene {
+  gene_name: String!
+}

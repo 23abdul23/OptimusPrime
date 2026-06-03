@@ -1,0 +1,9 @@
+services:
+  clickhouse:
+    ports:
+      - "8123:8123"   # HTTP interface
+      - "9000:9000"   # Native TCP interface
+
+  redis:
+    ports:
+      - "6379:6379"   # Redis default port

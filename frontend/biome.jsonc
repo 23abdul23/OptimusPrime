@@ -1,0 +1,85 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.3.7/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true,
+    "defaultBranch": "main"
+  },
+  "files": {
+    "includes": [
+      "app/**/*.{js,jsx,ts,tsx}",
+      "components/**/*.{js,jsx,ts,tsx}",
+      "lib/**/*.{ts,tsx}",
+      "theme.config.{js,ts,tsx}",
+      "mdx-components.{js,ts,tsx}",
+      "content/**/*.ts",
+      "!**/*.min.js",
+      "!**/dist",
+      "!**/build",
+      "!**/node_modules"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineEnding": "lf",
+    "formatWithErrors": false,
+    "lineWidth": 120
+  },
+  "assist": {
+    "actions": {
+      "source": {
+        "recommended": true,
+        "organizeImports": "on",
+        "useSortedProperties": "on"
+      }
+    }
+  },
+  "linter": {
+    "enabled": true,
+    "domains": {
+      "next": "all",
+      "react": "all",
+      "tailwind": "all"
+    },
+    "rules": {
+      "recommended": true,
+      "nursery": {
+        "useSortedClasses": "warn"
+      },
+      "style": {
+        "noParameterAssign": "off",
+        "useSingleVarDeclarator": "off",
+        "useShorthandAssign": "off",
+        "noNonNullAssertion": "off",
+        "useNodejsImportProtocol": "off"
+      },
+      "suspicious": {
+        "noAssignInExpressions": "off",
+        "noAsyncPromiseExecutor": "off",
+        "noUnknownAtRules": "off"
+      },
+      "a11y": {
+        "useMediaCaption": "off"
+      },
+      "complexity": {
+        "noCommaOperator": "off"
+      }
+    },
+    "includes": ["**", "!**/node_modules/**"]
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single",
+      "jsxQuoteStyle": "single",
+      "quoteProperties": "asNeeded",
+      "trailingCommas": "all",
+      "semicolons": "always",
+      "arrowParentheses": "asNeeded",
+      "bracketSpacing": true,
+      "bracketSameLine": false
+    }
+  }
+}

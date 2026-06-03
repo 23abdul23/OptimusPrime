@@ -1,0 +1,174 @@
+---
+title: CHANGELOG
+description: Summary of release highlights of TBEP tool
+---
+
+# CHANGELOG
+
+## v2.0.0-dev.3
+
+Our Sponsor (Web search in Chatbot):
+
+![Tavily Logo](https://mintcdn.com/tavilyai/tgJqPSjqNVSkMFTO/logo/light.svg?fit=max&auto=format&n=tgJqPSjqNVSkMFTO&q=85&s=3c3c6a1ec9cbf7cc7fdc07e519610ac1)
+
+- **[FEATURE]** Now Chatbot in [/knowledge-graph] can answer questions related to knowledge graph data and structure, with access to web search results using our sponsor [Tavily](https://tavily.com/).
+- **[FEATURE]** Chatbot also supports tool calls to fetch knowledge graph data like node properties, neighborhood, and paths between nodes. Cherry on the top, sometimes you can view what he is trying to say visually with mermaid diagrams or changes in the UI!
+
+NOTE: This feature is in very early development and likely have some bugs. Please report any issues you encounter in the [feedback](/feedback). All will be resolved before stable release.
+
+## v2.0.0-dev.2
+
+- **[IMPROVEMENT]** Enhanced render of knowledge graph using WebWorker
+- **[FEATURE]** Path finding and DWPC algorithm ([Degree Weighted Path Count](https://doi.org/10.1093/gigascience/giad047)) for knowledge graphs, enabling users to explore specific relationships and paths between entities in the graph.
+- **[FEATURE]** Added **Focused View** toggle for algorithm results - isolates and displays only result nodes/edges in dense graphs, making it easier to visualize path finding and clustering results
+
+## v2.0.0-dev.1
+
+Initial development release of TBEPv2. This version introduces a revamped architecture and new features to enhance user experience and performance. This has been focussed on playing with knowledge graphs and integrating LLMs more deeply into the analysis workflow.
+
+- **[FEATURE]** Introduced box & lasso selection capabilities for Sigma.js graphs through a new selection plugin.
+- **[FEATURE]** Upload , visualize and export knowledge graphs in various formats (e.g., JSON, CSV, GraphML, Gephi GEXF).
+
+_Don't have much time and features to describe yet, stay tuned for more updates!_
+
+## v1.3.1
+
+- **[IMPROVEMENT]** Made auto-completion of search genes more usable.
+
+This marks the end of building and maintaining of TBEPv1. Only very important bug fixes will be patched. We are now moving towards buidling TBEPv2 and this may some time and may bring many breaking changes in the middle, so leaving it clean until we have some stable updates.
+
+## v1.3.0
+
+- **[FEATURE]** Chatbot rendering capabilities are improved. Now even draws mermaid diagrams for illustration.
+- **[IMPROVEMENT]** Major performance improvement in the backend API to speedup some queries
+- **[IMPROVEMENT]** Added observability for LLM interactions using Langfuse, enabling better tracking and debugging of user queries and model responses. This helps us enhance the chatbot experience and ensure reliable performance. Please refer to our updated [Privacy Policy](./privacy-policy.mdx) for more details on data handling and privacy measures.
+
+BREAKING CHANGES: Now, tbep-backend@1.3.0 is needed to function properly.
+
+## v1.2.8
+
+- **[FEATURE]** Added OpenTargets portal like heatmap to TBEP.
+- **[IMPROVEMENT]** Now, you can give us rating also in our feedback form. This is done to remove annoying pop-ups by us powered by Tally to gather rating.
+
+## v1.2.7
+
+- **[RELEASE]** Project is now released with the name "TBEP" in zenodo. You can find the release [here](https://doi.org/10.5281/zenodo.16742136).
+- **[BUG]** Fixed the issue where upon using "Seed Proximity Cut-off" feature, the ringed nodes are being generated upon hovering on the edges.
+
+## v1.2.6
+
+- **[FEATURE]** Added a new feature to allow multiple sources for generation of network. Operations on score will be performed on the average of the scores from all the sources.
+
+## v1.2.5
+
+- **[FEATURE]** Added autofill seed genes based on overall association scores from the [Open Targets](https://platform.opentargets.org/) platform to help users quickly start analysis with top-ranked genes.
+- **[BUG]** Fixed the issue of reported bug where 2nd order of MAPT doesn't show GSK3B but same configuration network of GSK3B shows MAPT.
+- **[BUG]** Fixed the issue where utilizing various features doesn't update the network view properly when used with searchbox input.
+- **[BUG]** Fixed the issue where unexpectedly bordered genes loose its bordered ring when Seed Proximity Cut-off (previously known Hub Genes) feature is being used.
+- **[BUG]** Fixed the issue where for chromium (Chrome, Edge, Brave etc.) users, the bounding box was not being cleared properly.
+- **[BUG]** Fixed the issue where even upon hiding a cluster, the nodes of the cluster were being highlighted when visible when they shouldn't have been.
+- **[IMPROVEMENT]** Disease dropdown search algorithm improved to show the most relevant diseases at the top of the list.
+- **[IMPROVEMENT]** Now, result table stays in the sorting order of the searchbox input.
+- **[IMPROVEMENT]** Enhanced export system: exporting to CSV now includes gene universal data along with their interaction data (edges).
+
+## v1.2.4
+
+- **[BUG]** Fixed wrong color and size mapping of Tissue Expression data in the network visualization page.
+- **[IMPROVEMENT]** improved the quality of [Network Analysis](./use-cases-and-short-help-videos.mdx#network-analysis-in-tbep) and [GSEA Analysis](./use-cases-and-short-help-videos.mdx#gsea-analysis) videos.
+- **[REVERT]** Removed the FunPPI database from the protein-protein interactions section for now.
+
+## v1.2.3
+
+- **[FEATURE]** Added IntAct database to show the protein-protein interactions. More to be added in the future.
+- **[IMPROVEMENT]** OpenTargets Portal data is now updated to the latest version (25.03).
+- **[IMPROVEMENT]** Added Alzheimer's Disease Use Case Video to the [Use Cases and Short Help Videos](use-cases-and-short-help-videos.mdx#alzheimer-disease-use-case) page.
+
+## v1.2.2
+
+- **[FEATURE]** Added additional provider for the LLM Chatbot from "OpenAI" to improve the response time and accuracy of the answers. You can choose between tuned "Gpt-4o" and "Llama 3.1" models in the chatbot.
+- **[FEATURE|IMPROVEMENT]** Now, only hovering over the edge will show the scores of the edge in the tooltip. This reduces the clutter and effort to show the edge scores without hovering over the edge. This also removes the requriement to have a checkbox to show the edge scores.
+- **[IMPROVEMENT]** Clustering algorithm's colors are now more distinct and easy to distinguish. The colors are now more vibrant and have a better contrast with the background.
+- **[IMPROVEMENT]** Hub Genes Identification feature now shows cut-off on number of edges which is shared with seed genes, enhancing the usability of the feature showing more connected genes with the seed genes.
+- **[IMPROVEMENT]** Added some help tooltip Content in the dropdown menu.
+- **[IMPROVEMENT|BUG]** Fixed redundancy of few diseases in the dropdown list of diseases in the left panel. Also, Target Disease Association properties is now shown in consistent according to the order that was present in OpenTargets Portal.
+- **[BUG]** UI fix which makes it appear that hidden nodes are also selected using selection box (while in actual, it was not being selected).
+- **[BUG]** Fixed the issue where on using Hub Genes Identification feature, upon hovering edge or node, the highlight (using border) of the hub genes disappears.
+- **[BUG]** Tissue Expression data was not being displayed and tool was crashing when the user selects the tissue expression data in the node color/size section.
+- **[CHANGE]** "Node Degree Cut-off" is now "Candidate Prioritization Cut-off" as it does not only consider the node degree but can also consider tissue specificity for cut-off.
+
+## v1.2.1
+
+- **[IMPROVEMENT]** Removed auto-scrolling when LLM answers a query in the chatbot.
+- **[BUG]** Fixed overlapping of the options in dropdown in Pathway and Tissue Specificity in node color/size section.
+- **[BUG]** Fixed a bug where upon selecting those properties whose value is not present in the database, the color/size shows some score.
+- **[CHANGE]** Left and Right Panel do not disappear when tab changes to Network statistics in the network visualization page.
+
+## v1.2.0
+
+- **[FEATURE]** Added Network statistics tab in the network visualization page to show the statistics of the network using various charts like Degree Distribution, Clustering Coefficient, etc.
+- **[FEATURE]** Added pie chart visualization in leiden clustering algorithm to show the distribution of clusters in the network.
+- **[IMPROVEMENT]** Added a new feature to download the leiden statistics in a CSV file. 
+- **[IMPROVEMENT]** Now, we accept feedback from the users to improve the tool. You can provide feedback by clicking on the feedback button on the bottom right corner of the page.
+- **[REVERT]** Reverted the home page UI changes made in v1.1.6 to the previous version while keeping the database statistics section.
+
+## v1.1.6
+
+- **[FEATURE]** Added some metrics in Leiden Clustering Algorithm to evaluate the quality of the clusters which can be easily exported in a CSV file.
+- **[IMPROVEMENT]** Overhauled the UI of the front page to make it more user-friendly. Also, added information about database statistics.
+- **[CHANGE]** Tutorial Videos Section is removed and all Tutorial Videos are now available on [this](use-cases-and-short-help-videos.mdx) page.
+
+## v1.1.5
+
+- **[FEATURE]** Added a new feature to download details of the selected nodes in the network.
+- **[BUG]** Fixed an issue where upon unclicking a node removes highlight even when this gene was in search gene textbox.
+- **[BUG]** Fixed an issue where legend of edge color changes on changing node color radio button.
+- **[IMPROVEMENT]** Added support of more diseases from OpenTargets Portal.
+- **[IMPROVEMENT]** In zoom control, now reset button fits all the nodes in the viewport perfectly.
+- **[IMPROVEMENT]** Added support of CSV file format for export all genes in the network. Removed JPEG format as it was unnecessary.
+
+## v1.1.4
+
+- **[IMPROVEMENT]** Now, you can delete all your history with just one click in the home page.
+- **[IMPROVEMENT]** Uploading file with same name as the previous one will now replace the previous file.
+- **[BUG]** Fixed issue of Edge opacity throwing error when changing the value when show edge color checkbox is checked.
+- **[BUG]** Fixed issue of hovering edge makes its extremities nodes' border size to increase.
+- **[BUG]** Fixed ambiguous behavior of select all button in multiple selection dropdowns.
+
+## v1.1.3
+
+- **[FEATURE]** Now, dropdown in radio buttons like Tissue Specificity & Pathway in node color/size section supports multiple selection. 
+- **[IMPROVEMENT]** You can now multiple prefix naming conventions like P-value, p-value, p value, pval, pvalue (case-insensitive) for the uploaded data in the network.
+- **[IMPROVEMENT]** Updated Documentation for [differential expression](knowledge-base/differential-expression.mdx) with a caution.
+- **[IMPROVEMENT]** Added Delete All button in Custom Upload Files section to clear all the uploaded files at once.
+- **[BUG]** Fixed issue on distinguishing nodes when using Gene Search Highlight and Hub Genes Identification feature parallely.
+- **[BUG]** Fixed issue of property name not changing even after changing the data type in node color/size section.
+- **[BUG]** Fixed issue of HGNC ID uploaded via Custom Upload Files not being reflected in the value when it was written in lowercase.
+
+## v1.1.2
+
+- **[IMPROVEMENT]** Added Tutorial Videos for the TBEP tool.
+- **[FEATURE]** Added Description of many properties in the dropdown menu.
+
+## v1.1.1
+
+- **[BUG]** Fixed the issue of the network visualization page having unexplained client side errors when clicking those genes which do not have any values in the database.
+- **[BUG]** Fixed Custom Upload Files not being reflected in their respective dropdown lists immediately after uploading.
+- **[FEATURE]** Now, you can change opacity of the network edges in the network visualization page to make the large network more readable.
+- **[FEATURE]** Now, you can view neighbours of a selected node in the network visualization page when clicked.
+    > **Note**: You can also view the neighbours of a selected node by pressing <kbd>`Cmd/Ctrl (⌘) + Hover`</kbd> on the node.
+
+## v1.0.0
+
+First release of TBEP tool. The following features are included:
+
+- **Network Visualization**: Visualize the network of genes and their interactions.
+- **Network Analysis**: Modify the network parameters to focus on the key drivers of the network.
+- **Node Details & GSEA**: Show the details of the selected nodes and perform Gene Set Enrichment Analysis (GSEA).
+- **Gene Search**: Search for genes and visualize the network of the selected gene.
+- **Custom Upload Files**: Upload your own gene expression data and visualize the network of the uploaded data, by choosing the uploaded property in the dropdown list. For file format of the uploaded csv data, please refer to the [Custom Upload Files Format](network-visualization/left-panel.mdx#file-format) section.
+
+## Beta (β) Feature
+
+- **LLM ChatBot**: A chatbot to answer your queries related to the data uploaded with citations (Sometimes, the citations may not be accurate). You may track the citations and verify the information from the original source.
+    > **Note**: Currently, LLM ChatBot does note have the capability to gather context directly from the network or your data uploaded. It is a simple chatbot to answer your specific bio-medical queries. Efforts are being made to improve the chatbot capabilities.
+

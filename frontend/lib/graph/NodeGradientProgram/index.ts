@@ -1,0 +1,50 @@
+import type { Attributes } from 'graphology-types';
+import { type NodeHoverDrawingFunction, NodeProgram, type ProgramInfo } from 'sigma/rendering';
+import type { NodeDisplayData, RenderParams } from 'sigma/types';
+import { floatColor } from 'sigma/utils';
+import { drawHover } from './canvas-hover';
+import FRAGMENT_SHADER_SOURCE from './node-gradient-frag.glsl';
+import VERTEX_SHADER_SOURCE from './node-gradient-vert.glsl';
+
+const GL_UNSIGNED_BYTE = 5121;
+const GL_FLOAT = 5126;
+const GL_POINTS = 0;
+
+const UNIFORMS = ['u_sizeRatio', 'u_pixelRatio', 'u_matrix'] as const;
+
+export default class NodeGradientProgram extends NodeProgram<(typeof UNIFORMS)[number]> {
+  getDefinition() {
+      return {
+        VERTICES: 1,
+        VERTEX_SHADER_SOURCE,
+        FRAGMENT_SHADER_SOURCE,
+        METHOD: GL_POINTS,
+        UNIFORMS,
+        ATTRIBUTES: [
+          { name: 'a_position', size: 2, type: GL_FLOAT },
+          { name: 'a_size', size: 1, type: GL_FLOAT },
+          { name: 'a_color', size: 4, type: GL_UNSIGNED_BYTE, normalized: true },
+          { name: 'a_id', size: 4, type: GL_UNSIGNED_BYTE, normalized: true },
+        ],
+      };
+  }
+
+  processVisibleItem(nodeIndex: number, startIndex: number, data: NodeDisplayData) {
+    const array = this.array;
+    array[startIndex++] = data.x;
+    array[startIndex++] = data.y;
+    array[startIndex++] = data.size;
+    array[startIndex++] = floatColor(data.color);
+    array[startIndex++] = nodeIndex;
+  }
+
+  setUniforms(params: RenderParams, { gl, uniformLocations }: ProgramInfo): void {
+    const { u_sizeRatio, u_pixelRatio, u_matrix } = uniformLocations;
+
+    gl.uniform1f(u_sizeRatio, params.sizeRatio);
+    gl.uniform1f(u_pixelRatio, params.pixelRatio);
+    gl.uniformMatrix3fv(u_matrix, false, params.matrix);
+  }
+
+  drawHover: NodeHoverDrawingFunction<Attributes, Attributes, Attributes> | undefined = drawHover;
+}
