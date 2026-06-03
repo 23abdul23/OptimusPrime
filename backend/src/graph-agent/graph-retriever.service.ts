@@ -3,7 +3,7 @@ import neo4j, { type Node as Neo4jNode, type Relationship as Neo4jRelationship }
 import { Neo4jService } from '@/neo4j/neo4j.service';
 import { OptimusKgService, type SerializedGraphPayload } from '@/optimuskg/optimuskg.service';
 import type { GraphAction, GraphEvidenceItem, GraphToolResult, RetrievalPlanStep, ResolvedEntity } from './graph-agent.types';
-import { compactRecord, serializeGraphFromRecords, toNumber } from './graph-agent.utils';
+import { compactRecord, parseJsonRecord, parseStringArray, serializeGraphFromRecords, toNumber } from './graph-agent.utils';
 
 type CypherRow = Record<string, unknown>;
 
@@ -35,6 +35,42 @@ export class GraphRetrieverService {
 
     for (const step of plan) {
       switch (step.tool) {
+        case 'getNodeDetails': {
+          const details = await this.getNodeDetails((step.params.nodeIds as string[] | undefined) ?? []);
+          evidence.push(...details.items);
+          break;
+        }
+
+        case 'retrieveEvidence': {
+          const result = await this.retrieveEvidenceBetweenNodes(
+            String(step.params.sourceId),
+            String(step.params.targetId),
+            (step.params.commonNeighborTypes as string[] | undefined) ?? [],
+            Number(step.params.limit ?? 8),
+          );
+
+          if (result.items.length === 0) {
+            warnings.push('No direct relationships or shared-neighbor evidence was found for the requested entities.');
+            break;
+          }
+
+          graphDelta = result.graph;
+          graphActions.push({
+            id: step.id,
+            type: 'load-subgraph',
+            mode: 'merge',
+            graph: result.graph,
+            highlightNodeIds: result.highlightNodeIds,
+          });
+          graphActions.push({
+            id: `${step.id}-focus`,
+            type: 'focus-nodes',
+            nodeIds: result.highlightNodeIds,
+          });
+          evidence.push(...result.items);
+          break;
+        }
+
         case 'shortestPath': {
           const result = await this.optimusKgService.shortestPath(
             String(step.params.sourceId),
@@ -109,6 +145,7 @@ export class GraphRetrieverService {
           const related = await this.getRelatedEntities(
             String(step.params.nodeId),
             (step.params.nodeTypes as string[] | undefined) ?? [],
+            (step.params.relationshipTypes as string[] | undefined) ?? [],
             Number(step.params.limit ?? 20),
           );
 
@@ -174,6 +211,8 @@ export class GraphRetrieverService {
             Number(step.params.radius ?? 1),
             Number(step.params.maxNodes ?? 80),
             Number(step.params.degreeLimit ?? 12),
+            (step.params.relationshipTypes as string[] | undefined) ?? [],
+            (step.params.nodeTypes as string[] | undefined) ?? [],
           );
 
           graphDelta = graph;
@@ -190,6 +229,39 @@ export class GraphRetrieverService {
             nodeIds: graph.nodes.map((node) => node.key),
           });
           evidence.push(this.graphToEvidence(step.id, 'relation', step.description, graph, 0.7));
+          break;
+        }
+
+        case 'expandSubgraph': {
+          const nodeIds = (step.params.nodeIds as string[] | undefined) ?? [];
+          if (nodeIds.length === 0) {
+            warnings.push('No seed nodes were available for graph expansion.');
+            break;
+          }
+
+          const graph = await this.optimusKgService.expandSubgraph(
+            nodeIds,
+            Number(step.params.hops ?? 1),
+            Number(step.params.maxNodes ?? 160),
+            Number(step.params.degreeLimit ?? 24),
+            (step.params.relationshipTypes as string[] | undefined) ?? [],
+            (step.params.nodeTypes as string[] | undefined) ?? [],
+          );
+
+          graphDelta = graph;
+          graphActions.push({
+            id: step.id,
+            type: 'load-subgraph',
+            mode: 'merge',
+            graph,
+            highlightNodeIds: graph.nodes.map((node) => node.key).slice(0, 16),
+          });
+          graphActions.push({
+            id: `${step.id}-focus`,
+            type: 'focus-nodes',
+            nodeIds: graph.nodes.map((node) => node.key).slice(0, 16),
+          });
+          evidence.push(this.graphToEvidence(step.id, 'relation', step.description, graph, 0.82));
           break;
         }
 
@@ -264,19 +336,227 @@ export class GraphRetrieverService {
     }
   }
 
-  private async getRelatedEntities(nodeId: string, nodeTypes: string[], limit: number) {
+  private async getNodeDetails(nodeIds: string[]) {
+    const items: GraphEvidenceItem[] = [];
+
+    for (const nodeId of Array.from(new Set(nodeIds.filter((value) => value.trim().length > 0))).slice(0, 6)) {
+      try {
+        const node = await this.optimusKgService.nodeDetails(nodeId);
+        const aliases = parseStringArray(node.properties.searchTerms).slice(0, 5);
+        const sourceIds = parseStringArray(node.properties.sourceIds).slice(0, 5);
+        const sourceNames = parseStringArray(node.properties.sourceNames).slice(0, 5);
+        const description =
+          typeof node.properties.description === 'string'
+            ? node.properties.description
+            : `${node.displayName} is represented in OptimusKG as a ${node.typeName} node.`;
+        const summaryParts = [description];
+        if (aliases.length > 0) {
+          summaryParts.push(`Aliases: ${aliases.join(', ')}.`);
+        }
+        if (sourceNames.length > 0 || sourceIds.length > 0) {
+          summaryParts.push(
+            `Sources: ${[...sourceNames, ...sourceIds].slice(0, 5).join(', ')}.`,
+          );
+        }
+
+        items.push({
+          id: `entity-${node.id}`,
+          kind: 'entity',
+          title: `${node.displayName} (${node.typeName})`,
+          summary: summaryParts.join(' '),
+          score: 0.72,
+          nodeIds: [node.id],
+          edgeIds: [],
+          metadata: compactRecord({
+            typeCode: node.typeCode,
+            typeName: node.typeName,
+            degree: node.degree,
+            aliases,
+            sourceIds,
+            sourceNames,
+          }),
+        });
+      } catch {
+        // Ignore missing node details; resolution already filtered candidates.
+      }
+    }
+
+    return { items };
+  }
+
+  private async retrieveEvidenceBetweenNodes(
+    sourceId: string,
+    targetId: string,
+    commonNeighborTypes: string[],
+    limit: number,
+  ) {
+    const session = this.neo4jService.getSession();
+    const boundedLimit = neo4j.int(Math.max(1, Math.trunc(toNumber(limit))));
+
+    try {
+      const directResult = await session.run(
+        `
+          MATCH (source:Entity {id: $sourceId})-[rel]-(target:Entity {id: $targetId})
+          RETURN source, rel, target
+          ORDER BY coalesce(rel.score, 0) DESC, type(rel)
+          LIMIT $limit
+        `,
+        { sourceId, targetId, limit: boundedLimit },
+      );
+
+      const commonNeighborResult = await session.run(
+        `
+          MATCH (source:Entity {id: $sourceId})-[r1]-(neighbor:Entity)-[r2]-(target:Entity {id: $targetId})
+          WHERE neighbor.id <> $sourceId
+            AND neighbor.id <> $targetId
+            AND (size($commonNeighborTypes) = 0 OR neighbor.typeName IN $commonNeighborTypes OR neighbor.typeCode IN $commonNeighborTypes)
+          RETURN source, r1, neighbor, r2, target, coalesce(r1.score, 0) + coalesce(r2.score, 0) AS combinedScore
+          ORDER BY combinedScore DESC, neighbor.displayName
+          LIMIT $limit
+        `,
+        {
+          sourceId,
+          targetId,
+          commonNeighborTypes,
+          limit: boundedLimit,
+        },
+      );
+
+      const nodes: Neo4jNode[] = [];
+      const relationships: Neo4jRelationship[] = [];
+      const items: GraphEvidenceItem[] = [];
+      const highlightNodeIds = new Set<string>([sourceId, targetId]);
+
+      for (const record of directResult.records) {
+        const source = record.get('source') as Neo4jNode;
+        const target = record.get('target') as Neo4jNode;
+        const relationship = record.get('rel') as Neo4jRelationship;
+        const relProps = relationship.properties as Record<string, unknown>;
+        const provenance = [...parseStringArray(relProps.sourceDirect), ...parseStringArray(relProps.sourceIndirect)];
+        const relationDetails = parseJsonRecord(relProps.propertiesJson);
+
+        nodes.push(source, target);
+        relationships.push(relationship);
+        items.push({
+          id: String(relProps.edgeKey ?? relationship.elementId),
+          kind: 'relation',
+          title: `${String(source.properties.displayName)} ${relationship.type} ${String(target.properties.displayName)}`,
+          summary: this.buildRelationSummary(
+            String(source.properties.displayName),
+            relationship.type,
+            String(target.properties.displayName),
+            provenance,
+            relationDetails,
+          ),
+          score: Math.min(0.99, 0.86 + Number(relProps.score ?? 0) * 0.1),
+          nodeIds: [String(source.properties.id), String(target.properties.id)],
+          edgeIds: [String(relProps.edgeKey ?? relationship.elementId)],
+          metadata: compactRecord({
+            relation: relationship.type,
+            confidence: relProps.score,
+            provenance: provenance.slice(0, 6),
+            details: relationDetails,
+          }),
+        });
+      }
+
+      for (const [index, record] of commonNeighborResult.records.entries()) {
+        const source = record.get('source') as Neo4jNode;
+        const target = record.get('target') as Neo4jNode;
+        const neighbor = record.get('neighbor') as Neo4jNode;
+        const left = record.get('r1') as Neo4jRelationship;
+        const right = record.get('r2') as Neo4jRelationship;
+        const combinedScore = toNumber(record.get('combinedScore'));
+        const leftProps = left.properties as Record<string, unknown>;
+        const rightProps = right.properties as Record<string, unknown>;
+        const neighborDescription =
+          typeof neighbor.properties.description === 'string' ? String(neighbor.properties.description) : undefined;
+
+        nodes.push(source, target, neighbor);
+        relationships.push(left, right);
+        highlightNodeIds.add(String(neighbor.properties.id));
+
+        items.push({
+          id: `shared-neighbor-${index}-${String(neighbor.properties.id)}`,
+          kind: 'path',
+          title: `Shared connector: ${String(neighbor.properties.displayName)}`,
+          summary: [
+            `${String(source.properties.displayName)} and ${String(target.properties.displayName)} are both connected to ${String(neighbor.properties.displayName)}.`,
+            `Relations: ${left.type} and ${right.type}.`,
+            neighborDescription ? `Neighbor description: ${neighborDescription}` : '',
+          ]
+            .filter((part) => part.length > 0)
+            .join(' '),
+          score: Math.min(0.92, 0.68 + combinedScore * 0.12),
+          nodeIds: [
+            String(source.properties.id),
+            String(neighbor.properties.id),
+            String(target.properties.id),
+          ],
+          edgeIds: [
+            String(leftProps.edgeKey ?? left.elementId),
+            String(rightProps.edgeKey ?? right.elementId),
+          ],
+          metadata: compactRecord({
+            sharedNeighborType: String(neighbor.properties.typeName ?? neighbor.properties.typeCode ?? 'Entity'),
+            leftRelation: left.type,
+            rightRelation: right.type,
+            combinedScore,
+            provenance: [
+              ...parseStringArray(leftProps.sourceDirect),
+              ...parseStringArray(leftProps.sourceIndirect),
+              ...parseStringArray(rightProps.sourceDirect),
+              ...parseStringArray(rightProps.sourceIndirect),
+            ].slice(0, 8),
+          }),
+        });
+      }
+
+      return {
+        graph: serializeGraphFromRecords(nodes, relationships, {
+          sourceId,
+          targetId,
+          retrieval: 'pair-evidence',
+        }),
+        items,
+        highlightNodeIds: [...highlightNodeIds],
+      };
+    } finally {
+      await this.neo4jService.releaseSession(session);
+    }
+  }
+
+  private async getRelatedEntities(
+    nodeId: string,
+    nodeTypes: string[],
+    relationshipTypes: string[],
+    limit: number,
+  ) {
     const session = this.neo4jService.getSession();
 
     try {
       const result = await session.run(
         `
           MATCH (start:Entity {id: $nodeId})-[rel]-(neighbor:Entity)
-          WHERE size($nodeTypes) = 0 OR neighbor.typeName IN $nodeTypes OR neighbor.typeCode IN $nodeTypes
+          WHERE (size($nodeTypes) = 0 OR neighbor.typeName IN $nodeTypes OR neighbor.typeCode IN $nodeTypes)
+            AND (
+              size($relationshipTypes) = 0
+              OR type(rel) IN $relationshipTypes
+              OR coalesce(rel.labelCode, '') IN $relationshipTypes
+            )
           RETURN start, rel, neighbor
-          ORDER BY coalesce(rel.score, 0) DESC, neighbor.displayName
+          ORDER BY
+            coalesce(rel.score, 0) DESC,
+            size(coalesce(rel.sourceDirect, [])) + size(coalesce(rel.sourceIndirect, [])) DESC,
+            neighbor.displayName
           LIMIT $limit
         `,
-        { nodeId, nodeTypes, limit: neo4j.int(Math.max(1, Math.trunc(toNumber(limit)))) },
+        {
+          nodeId,
+          nodeTypes,
+          relationshipTypes,
+          limit: neo4j.int(Math.max(1, Math.trunc(toNumber(limit)))),
+        },
       );
 
       const nodes: Neo4jNode[] = [];
@@ -287,19 +567,38 @@ export class GraphRetrieverService {
         const start = record.get('start') as Neo4jNode;
         const neighbor = record.get('neighbor') as Neo4jNode;
         const relationship = record.get('rel') as Neo4jRelationship;
+        const relProps = relationship.properties as Record<string, unknown>;
+        const provenance = [...parseStringArray(relProps.sourceDirect), ...parseStringArray(relProps.sourceIndirect)];
+        const relationDetails = parseJsonRecord(relProps.propertiesJson);
+        const neighborDescription =
+          typeof neighbor.properties.description === 'string' ? String(neighbor.properties.description) : undefined;
         nodes.push(start, neighbor);
         relationships.push(relationship);
         items.push({
           id: String(relationship.properties.edgeKey ?? relationship.elementId),
           kind: 'relation',
           title: `${String(start.properties.displayName)} -> ${String(neighbor.properties.displayName)}`,
-          summary: `${relationship.type} between ${String(start.properties.displayName)} and ${String(neighbor.properties.displayName)}.`,
-          score: Number(relationship.properties.score ?? 0.75),
+          summary: this.buildRelationSummary(
+            String(start.properties.displayName),
+            relationship.type,
+            String(neighbor.properties.displayName),
+            provenance,
+            {
+              ...(relationDetails ?? {}),
+              neighborType: String(neighbor.properties.typeName ?? neighbor.properties.typeCode ?? 'Entity'),
+              neighborDescription,
+            },
+          ),
+          score: Math.min(0.95, 0.7 + toNumber(relProps.score) * 0.18 + Math.min(0.06, provenance.length * 0.01)),
           nodeIds: [String(start.properties.id), String(neighbor.properties.id)],
           edgeIds: [String(relationship.properties.edgeKey ?? relationship.elementId)],
           metadata: compactRecord({
             relation: relationship.type,
-            details: relationship.properties,
+            confidence: relProps.score,
+            provenance: provenance.slice(0, 8),
+            neighborType: String(neighbor.properties.typeName ?? neighbor.properties.typeCode ?? 'Entity'),
+            neighborDescription,
+            details: relationDetails,
           }),
         });
       }
@@ -317,7 +616,7 @@ export class GraphRetrieverService {
   }
 
   private async retrieveClinicalGuidelines(nodeId: string, limit: number) {
-    return this.getRelatedEntities(nodeId, ['Clinical Guideline', 'Guideline'], limit);
+    return this.getRelatedEntities(nodeId, ['Clinical Guideline', 'Guideline'], [], limit);
   }
 
   private async traverseTypedPaths(startId: string, typeSequences: string[][], limit: number) {
@@ -364,6 +663,15 @@ export class GraphRetrieverService {
       for (const [index, record] of result.records.entries()) {
         const pathNodes = record.get('nodes') as Neo4jNode[];
         const pathRelationships = record.get('relationships') as Neo4jRelationship[];
+        const provenance = pathRelationships.flatMap((relationship) => {
+          const relProps = relationship.properties as Record<string, unknown>;
+          return [...parseStringArray(relProps.sourceDirect), ...parseStringArray(relProps.sourceIndirect)];
+        });
+        const terminalNode = pathNodes[pathNodes.length - 1];
+        const terminalDescription =
+          typeof terminalNode?.properties?.description === 'string'
+            ? String(terminalNode.properties.description)
+            : undefined;
         nodes.push(...pathNodes);
         relationships.push(...pathRelationships);
 
@@ -371,12 +679,19 @@ export class GraphRetrieverService {
           id: `typed-path-${index}`,
           kind: 'path',
           title: pathNodes.map((node) => String(node.properties.displayName)).join(' -> '),
-          summary: pathRelationships.map((relationship) => relationship.type).join(' -> '),
+          summary: [
+            `Path relations: ${pathRelationships.map((relationship) => relationship.type).join(' -> ')}.`,
+            terminalDescription ? `Terminal node: ${terminalDescription}` : '',
+            provenance.length > 0 ? `Sources: ${Array.from(new Set(provenance)).slice(0, 5).join(', ')}.` : '',
+          ]
+            .filter((part) => part.length > 0)
+            .join(' '),
           score: 0.9 - index * 0.05,
           nodeIds: pathNodes.map((node) => String(node.properties.id)),
           edgeIds: pathRelationships.map((relationship) => String(relationship.properties.edgeKey ?? relationship.elementId)),
           metadata: {
             typeSequence: sequence,
+            provenance: Array.from(new Set(provenance)).slice(0, 8),
           },
         });
       }
@@ -401,19 +716,85 @@ export class GraphRetrieverService {
     graph: SerializedGraphPayload,
     score: number,
   ): GraphEvidenceItem {
-    const nodeLabels = graph.nodes.map((node) => String(node.attributes.label ?? node.key));
+    const { topNodeTypes, typeSummary } = this.summarizeNodeTypes(graph);
+    const centerNodeId =
+      typeof graph.attributes.centerNodeId === 'string' ? String(graph.attributes.centerNodeId) : undefined;
+    const centerNodeLabel =
+      centerNodeId && graph.nodes.find((node) => node.key === centerNodeId)
+        ? String(graph.nodes.find((node) => node.key === centerNodeId)?.attributes.label ?? centerNodeId)
+        : undefined;
+    const expandedFromNodeIds = Array.isArray(graph.attributes.expandedFromNodeIds)
+      ? graph.attributes.expandedFromNodeIds.map((nodeId) => String(nodeId))
+      : [];
+    const seedLabels = expandedFromNodeIds
+      .map((nodeId) => graph.nodes.find((node) => node.key === nodeId))
+      .filter((node): node is SerializedGraphPayload['nodes'][number] => Boolean(node))
+      .map((node) => String(node.attributes.label ?? node.key));
+    const summary = centerNodeLabel
+      ? `Retrieved ${graph.nodes.length} nodes and ${graph.edges.length} edges around ${centerNodeLabel}. ${typeSummary}`
+      : seedLabels.length > 0
+        ? `Expanded a graph from ${seedLabels.slice(0, 4).join(', ')} with ${graph.nodes.length} nodes and ${graph.edges.length} edges. ${typeSummary}`
+        : `Retrieved a subgraph with ${graph.nodes.length} nodes and ${graph.edges.length} edges. ${typeSummary}`;
+
     return {
       id,
       kind,
       title,
-      summary: nodeLabels.join(' -> '),
+      summary,
       score,
       nodeIds: graph.nodes.map((node) => node.key),
       edgeIds: graph.edges.map((edge) => edge.key),
       metadata: {
         nodeCount: graph.nodes.length,
         edgeCount: graph.edges.length,
+        topNodeTypes,
       },
+    };
+  }
+
+  private buildRelationSummary(
+    sourceName: string,
+    relationType: string,
+    targetName: string,
+    provenance: string[],
+    relationDetails?: Record<string, unknown>,
+  ) {
+    const parts = [`${relationType} between ${sourceName} and ${targetName}.`];
+    if (provenance.length > 0) {
+      parts.push(`Sources: ${provenance.slice(0, 5).join(', ')}.`);
+    }
+    if (relationDetails) {
+      const detailEntries = Object.entries(relationDetails)
+        .filter(([, value]) => typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean')
+        .slice(0, 3)
+        .map(([key, value]) => `${key}: ${String(value)}`);
+      if (detailEntries.length > 0) {
+        parts.push(`Details: ${detailEntries.join('; ')}.`);
+      }
+    }
+    return parts.join(' ');
+  }
+
+  private summarizeNodeTypes(graph: SerializedGraphPayload) {
+    const counts = new Map<string, number>();
+    for (const node of graph.nodes) {
+      const nodeType = String(node.attributes.nodeType ?? node.attributes.typeCode ?? 'Entity');
+      counts.set(nodeType, (counts.get(nodeType) ?? 0) + 1);
+    }
+
+    const topNodeTypes = [...counts.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, 4)
+      .map(([type, count]) => ({ type, count }));
+
+    const typeSummary =
+      topNodeTypes.length > 0
+        ? `Top node types: ${topNodeTypes.map(({ type, count }) => `${type} (${count})`).join(', ')}.`
+        : 'Top node types were not available.';
+
+    return {
+      topNodeTypes,
+      typeSummary,
     };
   }
 }

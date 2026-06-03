@@ -54,6 +54,15 @@ export interface OptimusSearchResult {
   matchedOn: string[];
 }
 
+export interface OptimusResolutionCandidate extends OptimusSearchResult {
+  score: number;
+  description?: string;
+  symbol?: string;
+  aliases: string[];
+  sourceIds: string[];
+  sourceNames: string[];
+}
+
 export interface OptimusGraphStats {
   nodeCount: number;
   edgeCount: number;
@@ -126,6 +135,10 @@ function buildFulltextQuery(query: string): string {
   }
 
   return tokens.map((token) => `${token.toLowerCase()}*`).join(' AND ');
+}
+
+function normalizeSearchInput(query: string): string {
+  return query.trim().toLowerCase().replace(/[’]/g, "'").replace(/\s+/g, ' ');
 }
 
 function parseArray(value: unknown): string[] {
@@ -330,6 +343,180 @@ export class OptimusKgService {
           matchedOn: ['displayName'],
         };
       });
+      await this.setCachedValue(cacheKey, payload, CACHE_TTL_SEARCH_SECONDS);
+      return payload;
+    } finally {
+      await this.neo4jService.releaseSession(session);
+    }
+  }
+
+  async resolveNodes(
+    queries: string[],
+    limit: number,
+    nodeTypes: string[] = [],
+  ): Promise<OptimusResolutionCandidate[]> {
+    const boundedLimit = clampInteger(limit, 1, 25);
+    const normalizedQueries = Array.from(new Set(queries.map(normalizeSearchInput).filter((value) => value.length > 0)));
+    const primaryQuery = normalizedQueries[0];
+
+    if (!primaryQuery) {
+      return [];
+    }
+
+    const cacheKey = this.cacheKey('resolve', {
+      queries: normalizedQueries,
+      limit: boundedLimit,
+      nodeTypes,
+    });
+    const cached = await this.getCachedValue<OptimusResolutionCandidate[]>(cacheKey);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    const session = this.neo4jService.getSession();
+    const fulltextQuery = buildFulltextQuery(primaryQuery);
+
+    try {
+      const metadataResult = await session.run(
+        `
+          MATCH (n:Entity)
+          WHERE size($nodeTypes) = 0 OR n.typeName IN $nodeTypes OR n.typeCode IN $nodeTypes
+          WITH
+            n,
+            [match IN [
+              CASE WHEN toLower(trim(coalesce(n.displayName, ''))) IN $exactVariants THEN 'displayName:exact' END,
+              CASE WHEN toLower(trim(coalesce(n.name, ''))) IN $exactVariants THEN 'name:exact' END,
+              CASE WHEN toLower(trim(coalesce(n.symbol, ''))) IN $exactVariants THEN 'symbol:exact' END,
+              CASE WHEN toLower(trim(coalesce(n.id, ''))) IN $exactVariants THEN 'id:exact' END,
+              CASE WHEN any(term IN coalesce(n.searchTerms, []) WHERE toLower(trim(term)) IN $exactVariants) THEN 'alias:exact' END,
+              CASE WHEN any(term IN coalesce(n.sourceIds, []) WHERE toLower(trim(term)) IN $exactVariants) THEN 'identifier:exact' END,
+              CASE WHEN any(term IN coalesce(n.sourceNames, []) WHERE toLower(trim(term)) IN $exactVariants) THEN 'sourceName:exact' END,
+              CASE WHEN toLower(coalesce(n.displayName, '')) CONTAINS $primaryQuery THEN 'displayName:contains' END,
+              CASE WHEN toLower(coalesce(n.name, '')) CONTAINS $primaryQuery THEN 'name:contains' END,
+              CASE WHEN toLower(coalesce(n.symbol, '')) CONTAINS $primaryQuery THEN 'symbol:contains' END,
+              CASE WHEN any(term IN coalesce(n.searchTerms, []) WHERE toLower(term) CONTAINS $primaryQuery) THEN 'alias:contains' END,
+              CASE WHEN any(term IN coalesce(n.sourceIds, []) WHERE toLower(term) CONTAINS $primaryQuery) THEN 'identifier:contains' END,
+              CASE WHEN any(term IN coalesce(n.sourceNames, []) WHERE toLower(term) CONTAINS $primaryQuery) THEN 'sourceName:contains' END,
+              CASE WHEN toLower(coalesce(n.description, '')) CONTAINS $primaryQuery THEN 'description:contains' END,
+              CASE WHEN toLower(coalesce(n.searchText, '')) CONTAINS $primaryQuery THEN 'searchText:contains' END,
+              CASE WHEN toLower(coalesce(n.extraJson, '')) CONTAINS $primaryQuery THEN 'extra:contains' END
+            ] WHERE match IS NOT NULL] AS matchedOn
+          WITH
+            n,
+            matchedOn,
+            reduce(score = 0, match IN matchedOn |
+              score + CASE
+                WHEN match = 'displayName:exact' THEN 180
+                WHEN match = 'symbol:exact' THEN 170
+                WHEN match = 'id:exact' THEN 170
+                WHEN match = 'alias:exact' THEN 165
+                WHEN match = 'identifier:exact' THEN 165
+                WHEN match = 'name:exact' THEN 155
+                WHEN match = 'sourceName:exact' THEN 145
+                WHEN match = 'displayName:contains' THEN 90
+                WHEN match = 'symbol:contains' THEN 88
+                WHEN match = 'alias:contains' THEN 84
+                WHEN match = 'identifier:contains' THEN 82
+                WHEN match = 'name:contains' THEN 78
+                WHEN match = 'sourceName:contains' THEN 70
+                WHEN match = 'searchText:contains' THEN 45
+                WHEN match = 'description:contains' THEN 35
+                WHEN match = 'extra:contains' THEN 30
+                ELSE 0
+              END
+            ) AS score
+          WHERE score > 0
+          RETURN n, matchedOn, score
+          ORDER BY score DESC, size(matchedOn) DESC, size(coalesce(n.searchTerms, [])) DESC, coalesce(n.displayName, n.id)
+          LIMIT $limit
+        `,
+        {
+          exactVariants: normalizedQueries,
+          primaryQuery,
+          nodeTypes,
+          limit: neo4j.int(boundedLimit),
+        },
+      );
+
+      const merged = new Map<string, OptimusResolutionCandidate>();
+
+      for (const record of metadataResult.records) {
+        const node = record.get('n') as Neo4jNode;
+        const props = node.properties as Record<string, unknown>;
+        const candidate: OptimusResolutionCandidate = {
+          id: String(props.id),
+          typeCode: String(props.typeCode),
+          typeName: String(props.typeName),
+          displayName: String(props.displayName),
+          matchedOn: parseArray(record.get('matchedOn')),
+          score: toNumber(record.get('score')),
+          description: typeof props.description === 'string' ? props.description : undefined,
+          symbol: typeof props.symbol === 'string' ? props.symbol : undefined,
+          aliases: parseArray(props.searchTerms),
+          sourceIds: parseArray(props.sourceIds),
+          sourceNames: parseArray(props.sourceNames),
+        };
+        merged.set(candidate.id, candidate);
+      }
+
+      try {
+        const fulltextResult = await session.run(
+          `
+            CALL db.index.fulltext.queryNodes($indexName, $query) YIELD node, score
+            WHERE size($nodeTypes) = 0 OR node.typeName IN $nodeTypes OR node.typeCode IN $nodeTypes
+            RETURN node, score
+            ORDER BY score DESC
+            LIMIT $limit
+          `,
+          {
+            indexName: FULLTEXT_INDEX,
+            query: fulltextQuery,
+            nodeTypes,
+            limit: neo4j.int(boundedLimit),
+          },
+        );
+
+        for (const record of fulltextResult.records) {
+          const node = record.get('node') as Neo4jNode;
+          const props = node.properties as Record<string, unknown>;
+          const id = String(props.id);
+          const fulltextScore = Math.max(1, Math.round(toNumber(record.get('score')) * 20));
+          const existing = merged.get(id);
+
+          if (existing) {
+            existing.score = Math.max(existing.score, fulltextScore);
+            existing.matchedOn = Array.from(new Set([...existing.matchedOn, 'fulltext']));
+            continue;
+          }
+
+          merged.set(id, {
+            id,
+            typeCode: String(props.typeCode),
+            typeName: String(props.typeName),
+            displayName: String(props.displayName),
+            matchedOn: ['fulltext'],
+            score: fulltextScore,
+            description: typeof props.description === 'string' ? props.description : undefined,
+            symbol: typeof props.symbol === 'string' ? props.symbol : undefined,
+            aliases: parseArray(props.searchTerms),
+            sourceIds: parseArray(props.sourceIds),
+            sourceNames: parseArray(props.sourceNames),
+          });
+        }
+      } catch {
+        // Ignore fulltext failures when exact metadata search succeeded.
+      }
+
+      const payload = [...merged.values()]
+        .sort(
+          (a, b) =>
+            b.score - a.score ||
+            b.matchedOn.length - a.matchedOn.length ||
+            a.displayName.length - b.displayName.length ||
+            a.displayName.localeCompare(b.displayName),
+        )
+        .slice(0, boundedLimit);
+
       await this.setCachedValue(cacheKey, payload, CACHE_TTL_SEARCH_SECONDS);
       return payload;
     } finally {
@@ -561,11 +748,29 @@ export class OptimusKgService {
       0,
       MAX_EXPANSION_SEED_COUNT,
     );
+    const boundedMaxNodes = clampInteger(maxNodes, 1, DEFAULT_SUBGRAPH_HARD_LIMIT);
+    const perSeedBudget =
+      boundedNodeIds.length > 0
+        ? Math.max(24, Math.min(boundedMaxNodes, Math.ceil(boundedMaxNodes / boundedNodeIds.length)))
+        : boundedMaxNodes;
+    let truncated = false;
 
     for (const nodeId of boundedNodeIds) {
-      const subgraph = await this.subgraph(nodeId, hops, maxNodes, degreeLimit, relationshipTypes, nodeTypes);
+      const remainingCapacity = boundedMaxNodes - mergedNodes.size;
+      if (remainingCapacity <= 0) {
+        truncated = true;
+        break;
+      }
+
+      const seedBudget = Math.max(1, Math.min(remainingCapacity, perSeedBudget));
+      const subgraph = await this.subgraph(nodeId, hops, seedBudget, degreeLimit, relationshipTypes, nodeTypes);
 
       for (const node of subgraph.nodes) {
+        if (!mergedNodes.has(node.key) && mergedNodes.size >= boundedMaxNodes) {
+          truncated = true;
+          continue;
+        }
+
         mergedNodes.set(node.key, {
           id: node.key,
           typeCode: String(node.attributes.typeCode ?? ''),
@@ -577,6 +782,11 @@ export class OptimusKgService {
       }
 
       for (const edge of subgraph.edges) {
+        if (!mergedNodes.has(edge.source) || !mergedNodes.has(edge.target)) {
+          truncated = true;
+          continue;
+        }
+
         mergedEdges.set(edge.key, {
           id: edge.key,
           from: edge.source,
@@ -587,13 +797,17 @@ export class OptimusKgService {
           properties: edge.attributes,
         });
       }
+
+      if (subgraph.attributes.truncated === true) {
+        truncated = true;
+      }
     }
 
     return this.serializeGraph([...mergedNodes.values()], [...mergedEdges.values()], {
       expandedFromNodeIds: boundedNodeIds,
       radius: clampInteger(hops, 1, MAX_SUBGRAPH_RADIUS),
       expansionSeedLimitApplied: nodeIds.length > boundedNodeIds.length,
-      truncated: false,
+      truncated,
     });
   }
 

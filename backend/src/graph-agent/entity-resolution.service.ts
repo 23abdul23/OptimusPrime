@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { OptimusKgService } from '@/optimuskg/optimuskg.service';
+import { OptimusKgService, type OptimusResolutionCandidate } from '@/optimuskg/optimuskg.service';
 import type { ExtractedConcept, ExtractedMention, ResolvedEntity } from './graph-agent.types';
 import { matchesType } from './graph-agent.utils';
 
@@ -21,14 +21,14 @@ export class EntityResolutionService {
         continue;
       }
 
-      const exactMatch = candidate.displayName.toLowerCase() === mention.text.toLowerCase();
+      const exactMatch = this.hasExactMetadataMatch(candidate);
       resolved.push({
         id: candidate.id,
         query: mention.text,
         displayName: candidate.displayName,
         typeCode: candidate.typeCode,
         typeName: candidate.typeName,
-        confidence: exactMatch ? 0.95 : filteredCandidates.length <= 1 ? 0.8 : 0.65,
+        confidence: exactMatch ? 0.98 : candidate.score >= 120 ? 0.9 : candidate.score >= 90 ? 0.8 : 0.68,
         matchedOn: candidate.matchedOn,
         source: mention.source,
       });
@@ -37,7 +37,7 @@ export class EntityResolutionService {
     if (resolved.length === 0) {
       for (const concept of concepts) {
         const candidates = await this.searchCandidatesForConcept(concept);
-        const candidate = this.pickBestCandidate(concept.text, candidates);
+        const candidate = this.pickBestCandidate(concept.text, candidates, { allowWeakContains: true });
         if (!candidate) {
           continue;
         }
@@ -67,20 +67,7 @@ export class EntityResolutionService {
   }
 
   private async searchCandidatesForMention(mention: ExtractedMention) {
-    const seen = new Map<string, Awaited<ReturnType<OptimusKgService['searchNodes']>>[number]>();
-    for (const variant of this.buildSearchVariants(mention.text, mention.typeHints)) {
-      const results = await this.optimusKgService.searchNodes(variant, 5, mention.typeHints);
-      for (const result of results) {
-        if (!seen.has(result.id)) {
-          seen.set(result.id, result);
-        }
-      }
-      if (seen.size >= 5) {
-        break;
-      }
-    }
-
-    return [...seen.values()];
+    return this.optimusKgService.resolveNodes(this.buildSearchVariants(mention.text, mention.typeHints), 8, mention.typeHints);
   }
 
   private async searchCandidatesForConcept(concept: ExtractedConcept) {
@@ -113,6 +100,11 @@ export class EntityResolutionService {
     variants.add(normalizedWhitespace);
     variants.add(withoutGenericLead);
     variants.add(this.toTitleCase(withoutGenericLead));
+    variants.add(withoutGenericLead.replace(/-/g, ' '));
+    variants.add(withoutGenericLead.replace(/\s+/g, '-'));
+    variants.add(withoutGenericLead.replace(/'s\b/gi, ''));
+    variants.add(this.expandGreekVariants(withoutGenericLead));
+    variants.add(this.expandGreekVariants(withoutGenericLead.replace(/-/g, ' ')));
 
     const diseaseMatch = withoutGenericLead.match(/([A-Za-z0-9-]+(?:\s+[A-Za-z0-9-]+){0,2}\s+disease)$/i);
     if (diseaseMatch) {
@@ -123,27 +115,97 @@ export class EntityResolutionService {
     if (typeHints.some((hint) => hint.toLowerCase() === 'disease') && !/\bdisease\b/i.test(withoutGenericLead)) {
       variants.add(`${withoutGenericLead} disease`);
       variants.add(this.toTitleCase(`${withoutGenericLead} disease`));
+      variants.add(`${withoutGenericLead.replace(/'s\b/gi, '')} disease`);
     }
 
-    return [...variants].filter((variant) => variant.trim().length >= 2);
+    return [...variants].map((variant) => variant.trim()).filter((variant) => variant.length >= 2);
   }
 
   private pickBestCandidate(
     mentionText: string,
-    candidates: Awaited<ReturnType<OptimusKgService['searchNodes']>>[number][],
+    candidates: OptimusResolutionCandidate[],
+    options: {
+      allowWeakContains?: boolean;
+    } = {},
   ) {
-    const normalizedMention = mentionText.trim().toLowerCase();
+    const ranked = [...candidates].sort(
+      (a, b) =>
+        b.score - a.score ||
+        this.matchPriority(b) - this.matchPriority(a) ||
+        a.displayName.length - b.displayName.length ||
+        a.displayName.localeCompare(b.displayName),
+    );
+    const best = ranked[0];
+    if (!best) {
+      return null;
+    }
 
-    return [...candidates].sort((a, b) => {
-      const aName = a.displayName.toLowerCase();
-      const bName = b.displayName.toLowerCase();
-      const aExact = aName === normalizedMention ? 2 : aName.includes(normalizedMention) ? 1 : 0;
-      const bExact = bName === normalizedMention ? 2 : bName.includes(normalizedMention) ? 1 : 0;
-      return bExact - aExact || a.displayName.length - b.displayName.length;
-    })[0] ?? null;
+    const threshold = this.minimumScoreThreshold(mentionText, options.allowWeakContains === true);
+    if (best.score < threshold) {
+      return null;
+    }
+
+    const second = ranked[1];
+    if (
+      !this.hasExactMetadataMatch(best) &&
+      second &&
+      Math.abs(best.score - second.score) <= 8 &&
+      this.matchPriority(best) === this.matchPriority(second)
+    ) {
+      return null;
+    }
+
+    return best;
   }
 
   private toTitleCase(value: string) {
     return value.replace(/\w\S*/g, (word) => word[0].toUpperCase() + word.slice(1).toLowerCase());
+  }
+
+  private hasExactMetadataMatch(candidate: OptimusResolutionCandidate) {
+    return candidate.matchedOn.some((match) => match.endsWith(':exact'));
+  }
+
+  private matchPriority(candidate: OptimusResolutionCandidate) {
+    if (candidate.matchedOn.includes('displayName:exact')) return 8;
+    if (candidate.matchedOn.includes('symbol:exact')) return 7;
+    if (candidate.matchedOn.includes('id:exact')) return 7;
+    if (candidate.matchedOn.includes('alias:exact')) return 6;
+    if (candidate.matchedOn.includes('identifier:exact')) return 6;
+    if (candidate.matchedOn.includes('name:exact')) return 5;
+    if (candidate.matchedOn.includes('sourceName:exact')) return 4;
+    if (candidate.matchedOn.includes('displayName:contains')) return 3;
+    if (candidate.matchedOn.includes('alias:contains')) return 2;
+    if (candidate.matchedOn.includes('fulltext')) return 1;
+    return 0;
+  }
+
+  private minimumScoreThreshold(mentionText: string, allowWeakContains: boolean) {
+    if (allowWeakContains) {
+      return 55;
+    }
+
+    const trimmed = mentionText.trim();
+    const isShortToken = trimmed.length <= 4 || /^[A-Z0-9-]{2,12}$/.test(trimmed);
+    if (isShortToken) {
+      return 120;
+    }
+
+    if (trimmed.split(/\s+/).length >= 2) {
+      return 78;
+    }
+
+    return 90;
+  }
+
+  private expandGreekVariants(value: string) {
+    return value
+      .replace(/\balpha\b/gi, 'α')
+      .replace(/\bbeta\b/gi, 'β')
+      .replace(/\bgamma\b/gi, 'γ')
+      .replace(/\bdelta\b/gi, 'δ')
+      .replace(/\bkappa\b/gi, 'κ')
+      .replace(/\blambda\b/gi, 'λ')
+      .replace(/\bomega\b/gi, 'ω');
   }
 }

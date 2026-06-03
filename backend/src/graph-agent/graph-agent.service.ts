@@ -81,6 +81,64 @@ export class GraphAgentService {
           extractedQuery.mentions,
           extractedQuery.concepts,
         );
+        const unresolvedMentions = this.getUnresolvedMentionTexts(extractedQuery.mentions, resolvedEntities);
+
+        if (this.shouldBlockOnUnresolvedMentions(extractedQuery.mentions.length, extractedQuery.intent.operation, unresolvedMentions)) {
+          const evidenceBundle = this.evidenceSelectionService.buildBundle({
+            query,
+            items: [],
+            resolvedEntities,
+            plan: [
+              {
+                id: `resolve-mentions-${Date.now()}`,
+                intent: 'relationship-analysis',
+                tool: 'resolveEntity',
+                description: 'Resolve all explicit biomedical mentions before retrieval continues.',
+                params: {
+                  unresolvedMentions,
+                },
+              },
+            ],
+            warnings: [
+              `I could not confidently resolve these explicit mentions from OptimusKG metadata: ${unresolvedMentions.join(', ')}.`,
+            ],
+          });
+
+          const nextState = await this.conversationStateService.saveConversationGraphState(
+            this.buildNextState({
+              previousState,
+              sessionId,
+              resolvedEntities,
+              evidenceBundle,
+              selectedNodeIds: (promptDto.selectedNodeContext ?? []).map((node) => node.id),
+            }),
+          );
+
+          writer.write({
+            type: 'data-graphEvidence',
+            id: `graph-evidence-${responseId}`,
+            data: evidenceBundle,
+          });
+          writer.write({
+            type: 'data-graphActions',
+            id: `graph-actions-${responseId}`,
+            data: [],
+          });
+          writer.write({
+            type: 'data-graphState',
+            id: `graph-state-${responseId}`,
+            data: {
+              sessionId,
+              state: nextState,
+            },
+          });
+          this.writeText(
+            writer,
+            `I could not confidently resolve these explicit mentions in OptimusKG: ${unresolvedMentions.join(', ')}. Refine the names or select the intended nodes in the graph and ask again.`,
+          );
+          return;
+        }
+
         const plan = this.retrievalPlannerService.plan({
           query,
           extractedQuery,
@@ -160,7 +218,7 @@ export class GraphAgentService {
     return {
       ...params.previousState,
       sessionId: params.sessionId,
-      activeEntities: params.resolvedEntities.length > 0 ? params.resolvedEntities : params.previousState.activeEntities,
+      activeEntities: this.mergeActiveEntities(params.resolvedEntities, params.previousState.activeEntities),
       resolvedNodeIds: [
         ...params.resolvedEntities.map((entity) => entity.id),
         ...params.previousState.resolvedNodeIds,
@@ -179,6 +237,27 @@ export class GraphAgentService {
       selectedNodeIds: params.selectedNodeIds,
       updatedAt: new Date().toISOString(),
     };
+  }
+
+  private mergeActiveEntities(
+    currentEntities: ConversationGraphState['activeEntities'],
+    previousEntities: ConversationGraphState['activeEntities'],
+  ) {
+    const merged = new Map<string, ConversationGraphState['activeEntities'][number]>();
+
+    for (const entity of [...currentEntities, ...previousEntities]) {
+      const existing = merged.get(entity.id);
+      if (!existing || entity.confidence > existing.confidence) {
+        merged.set(entity.id, entity);
+      }
+    }
+
+    return [...merged.values()].sort(
+      (a, b) =>
+        this.rankActiveEntity(b, currentEntities) - this.rankActiveEntity(a, currentEntities) ||
+        b.confidence - a.confidence ||
+        a.displayName.localeCompare(b.displayName),
+    );
   }
 
   private writeText(writer: UIMessageStreamWriter<GraphAgentUIMessage>, text: string) {
@@ -227,5 +306,62 @@ export class GraphAgentService {
       insufficientEvidence: false,
       warnings: [],
     };
+  }
+
+  private getUnresolvedMentionTexts(
+    mentions: Array<{ text: string }>,
+    resolvedEntities: Array<{ query: string }>,
+  ) {
+    const resolvedMentionKeys = new Set(
+      resolvedEntities.map((entity) => entity.query.trim().toLowerCase()).filter((value) => value.length > 0),
+    );
+
+    return Array.from(
+      new Set(
+        mentions
+          .map((mention) => mention.text.trim())
+          .filter((text) => text.length > 0 && !resolvedMentionKeys.has(text.toLowerCase())),
+      ),
+    );
+  }
+
+  private shouldBlockOnUnresolvedMentions(
+    mentionCount: number,
+    operation: string,
+    unresolvedMentions: string[],
+  ) {
+    if (unresolvedMentions.length === 0) {
+      return false;
+    }
+
+    if (mentionCount === unresolvedMentions.length) {
+      return true;
+    }
+
+    return mentionCount > 1 && ['path-search', 'comparison', 'relationship-analysis'].includes(operation);
+  }
+
+  private rankActiveEntity(
+    entity: ConversationGraphState['activeEntities'][number],
+    currentEntities: ConversationGraphState['activeEntities'],
+  ) {
+    const currentIds = new Set(currentEntities.map((current) => current.id));
+    const normalizedType = entity.typeName.toLowerCase();
+    let score = entity.confidence;
+
+    if (currentIds.has(entity.id)) {
+      score += 2;
+    }
+    if (/(disease|phenotype|syndrome|disorder)/i.test(normalizedType)) {
+      score += 1.2;
+    }
+    if (/(drug|pathway)/i.test(normalizedType)) {
+      score += 0.8;
+    }
+    if (/(gene|protein)/i.test(normalizedType)) {
+      score += 0.5;
+    }
+
+    return score;
   }
 }
