@@ -35,6 +35,8 @@ async function bootstrap() {
     methods: 'GET, POST',
   });
   app.use(compression());
+  app.useBodyParser('json', { limit: '1mb' });
+  app.useBodyParser('urlencoded', { limit: '1mb', extended: true });
   app.use(cookieParser());
   await app.listen(configService.get('PORT', 4000));
 }

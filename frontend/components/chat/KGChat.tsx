@@ -1,16 +1,23 @@
 'use client';
 
 import { useChat } from '@ai-sdk/react';
-import { DefaultChatTransport, lastAssistantMessageIsCompleteWithToolCalls } from 'ai';
+import { DefaultChatTransport } from 'ai';
 import { BookmarkIcon, CheckIcon, RefreshCcwIcon } from 'lucide-react';
 import React from 'react';
 import { toast } from 'sonner';
 import { LLM_MODELS } from '@/lib/data';
-import { useStore } from '@/lib/hooks';
+import type {
+  GraphAction,
+  GraphAgentUIMessage,
+  GraphEvidenceBundle,
+} from '@/lib/graph-agent-types';
 import { useKGStore } from '@/lib/hooks/use-kg-store';
-import type { KGUIMessage } from '@/lib/kg-chat-types';
-import { buildNodeSearchIndex, buildPropertySearchIndex, KG_TOOLS, type ToolContext } from '@/lib/kg-tools';
 import { generateSessionId, getUserId } from '@/lib/langfuse-tracking';
+import {
+  applyOptimusGraph,
+  focusOptimusNodes,
+  highlightOptimusPath,
+} from '@/lib/optimuskg';
 import { cn, envURL } from '@/lib/utils';
 import { Checkpoint, CheckpointIcon, CheckpointTrigger } from '../ai-elements/checkpoint';
 import { Conversation, ConversationContent, ConversationScrollButton } from '../ai-elements/conversation';
@@ -57,7 +64,6 @@ import {
   PromptInputTools,
 } from '../ai-elements/prompt-input';
 import { Reasoning, ReasoningContent, ReasoningTrigger } from '../ai-elements/reasoning';
-import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from '../ai-elements/tool';
 
 type CheckpointType = {
   id: string;
@@ -66,21 +72,71 @@ type CheckpointType = {
   messageCount: number;
 };
 
+type GraphAgentPart = GraphAgentUIMessage['parts'][number];
+type GraphEvidencePart = { type: 'data-graphEvidence'; id?: string; data: GraphEvidenceBundle };
+type GraphActionsPart = { type: 'data-graphActions'; id?: string; data: GraphAction[] };
+type GraphStatePart = {
+  type: 'data-graphState';
+  id?: string;
+  data: {
+    sessionId: string;
+    state: {
+      updatedAt: string;
+    };
+  };
+};
+
+function sanitizeMessageParts(parts: GraphAgentPart[]): GraphAgentPart[] {
+  return parts.filter((part) => part.type === 'text' || part.type === 'file');
+}
+
+function buildMinimalGraphAgentMessages(messages: GraphAgentUIMessage[]): GraphAgentUIMessage[] {
+  const latestUserMessage = [...messages].reverse().find((message) => message.role === 'user');
+
+  if (!latestUserMessage) {
+    return [];
+  }
+
+  return [
+    {
+      ...latestUserMessage,
+      parts: sanitizeMessageParts(latestUserMessage.parts),
+    },
+  ];
+}
+
+function isGraphEvidencePart(part: GraphAgentPart): part is GraphEvidencePart {
+  return part.type === 'data-graphEvidence';
+}
+
+function isGraphActionsPart(part: GraphAgentPart): part is GraphActionsPart {
+  return part.type === 'data-graphActions';
+}
+
+function isGraphStatePart(part: GraphAgentPart): part is GraphStatePart {
+  return part.type === 'data-graphState';
+}
+
+function graphAgentApiBaseUrl() {
+  const backendBase = process.env.NEXT_PUBLIC_BACKEND_URL;
+  if (backendBase) {
+    return envURL(backendBase);
+  }
+
+  const llmBase = envURL(process.env.NEXT_PUBLIC_LLM_BACKEND_URL);
+  return llmBase.replace(/\/llm$/, '');
+}
+
 export interface KGChatProps {
   onChatOpen?: (isOpen: boolean) => void;
   children?: (props: KGChatRenderProps) => React.ReactNode;
 }
 
 export interface KGChatRenderProps {
-  // State
   model: string;
-
-  // Chat data
-  messages: ReturnType<typeof useChat>['messages'];
-  status: ReturnType<typeof useChat>['status'];
+  messages: ReturnType<typeof useChat<GraphAgentUIMessage>>['messages'];
+  status: ReturnType<typeof useChat<GraphAgentUIMessage>>['status'];
   checkpoints: CheckpointType[];
-
-  // Handlers
   handleSubmit: (message: PromptInputMessage) => Promise<void>;
   handleDeleteMessages: () => void;
   handleSubmitAction: () => void;
@@ -88,170 +144,148 @@ export interface KGChatRenderProps {
   regenerate: () => void;
   createCheckpoint: (messageIndex: number) => void;
   restoreToCheckpoint: (messageIndex: number) => void;
-
-  // Components
   renderMessages: (alert?: { component: React.ReactNode; show: boolean }) => React.ReactNode;
   renderPromptInput: () => React.ReactNode;
 }
 
-/**
- * KGChat Component
- * Knowledge Graph-aware chat with client-side tool execution
- *
- * Key differences from ChatBase:
- * - Uses /kg-chat endpoint instead of /llm
- * - Implements onToolCall for client-side tool execution
- * - Builds graph context and property search index on mount
- * - Renders tool results inline with messages
- */
+function GraphEvidencePanel({ bundle }: { bundle: GraphEvidenceBundle }) {
+  return (
+    <div className='mt-2 ml-10 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm shadow-sm'>
+      <div className='flex items-center justify-between gap-2'>
+        <span className='font-semibold text-slate-900'>Graph Evidence</span>
+        {bundle.insufficientEvidence ? (
+          <span className='rounded-full bg-amber-100 px-2 py-0.5 text-amber-800 text-xs'>Partial</span>
+        ) : (
+          <span className='rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-800 text-xs'>Grounded</span>
+        )}
+      </div>
+
+      {bundle.resolvedEntities.length > 0 && (
+        <div className='mt-2 text-slate-700'>
+          <span className='font-medium'>Resolved:</span>{' '}
+          {bundle.resolvedEntities.map((entity) => `${entity.displayName} (${entity.typeName})`).join(', ')}
+        </div>
+      )}
+
+      {bundle.plan.length > 0 && (
+        <div className='mt-2 text-slate-700'>
+          <span className='font-medium'>Plan:</span> {bundle.plan.map((step) => step.description).join(' | ')}
+        </div>
+      )}
+
+      {bundle.items.length > 0 && (
+        <div className='mt-3 space-y-2'>
+          {bundle.items.slice(0, 6).map((item) => (
+            <div key={item.id} className='rounded-md border border-slate-200 bg-white p-2'>
+              <div className='font-medium text-slate-900'>{item.title}</div>
+              <div className='text-slate-600'>{item.summary}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {bundle.warnings.length > 0 && (
+        <div className='mt-3 rounded-md bg-amber-50 p-2 text-amber-900 text-xs'>
+          {bundle.warnings.join(' ')}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function GraphActionsPanel({ actions }: { actions: GraphAction[] }) {
+  if (actions.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className='mt-2 ml-10 rounded-lg border border-slate-200 bg-white p-3 text-slate-700 text-sm shadow-sm'>
+      <div className='font-semibold text-slate-900'>Graph Actions</div>
+      <div className='mt-2 flex flex-wrap gap-2'>
+        {actions.map((action) => (
+          <span key={action.id} className='rounded-full bg-sky-100 px-2 py-0.5 text-sky-800 text-xs'>
+            {action.type}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function KGChat({ onChatOpen, children }: KGChatProps) {
   const [model, setModel] = React.useState<(typeof LLM_MODELS)[number]['id']>(LLM_MODELS[0].id);
   const [modelSelectorOpen, setModelSelectorOpen] = React.useState(false);
   const [checkpoints, setCheckpoints] = React.useState<CheckpointType[]>([]);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
+  const processedActionIds = React.useRef<Set<string>>(new Set());
+  const sigmaInstance = useKGStore((state) => state.sigmaInstance);
 
-  // Generate unique IDs for Langfuse session tracking
   const sessionId = React.useMemo(() => generateSessionId(), []);
 
-  const { messages, setMessages, sendMessage, status, regenerate, stop, clearError, addToolOutput } =
-    useChat<KGUIMessage>({
-      transport: new DefaultChatTransport({
-        api: `${envURL(process.env.NEXT_PUBLIC_LLM_BACKEND_URL)}/kg-chat`,
-      }),
-      onError(error) {
-        toast.error('Failed to fetch response from LLM', {
-          cancel: { label: 'Close', onClick() {} },
-          description: error.message || 'LLM server is not responding. Please try again later.',
-        });
-      },
-      sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
-      async onToolCall({ toolCall }) {
-        // Type narrowing: Skip dynamic tools (not supported in our registry)
-        if (toolCall.dynamic) {
-          return;
-        }
-
-        // CRITICAL: Build indexes fresh on each tool call to capture latest state
-        // This ensures we always use the most up-to-date sigmaInstance, kgPropertyOptions, and radioOptions
-        // which may have been loaded/updated after the component mounted
-        const currentSigmaInstance = useKGStore.getState().sigmaInstance;
-        const currentKgPropertyOptions = useKGStore.getState().kgPropertyOptions;
-        const currentRadioOptions = useStore.getState().radioOptions;
-
-        if (!currentSigmaInstance) {
-          throw new Error('Graph not loaded. Please upload or load a knowledge graph first.');
-        }
-
-        const graph = currentSigmaInstance.getGraph();
-
-        // Build fresh indexes with latest data
-        const graphSearchIndex = buildNodeSearchIndex(graph);
-        const propertySearchIndex = buildPropertySearchIndex(currentKgPropertyOptions || {}, currentRadioOptions);
-
-        // Build tool context with fresh indexes
-        const toolContext: ToolContext = {
-          store: useKGStore.getState(),
-          legacy_store: useStore.getState(),
-          graphSearchIndex,
-          propertySearchIndex,
+  const { messages, setMessages, sendMessage, status, regenerate, stop, clearError } = useChat<GraphAgentUIMessage>({
+    transport: new DefaultChatTransport({
+      api: `${graphAgentApiBaseUrl()}/graph-agent/chat`,
+      prepareSendMessagesRequest({ body, messages }) {
+        return {
+          body: {
+            ...body,
+            messages: buildMinimalGraphAgentMessages(messages),
+          },
         };
-
-        try {
-          // Get tool function from registry
-          const toolFn = KG_TOOLS[toolCall.toolName as keyof typeof KG_TOOLS];
-
-          if (!toolFn) {
-            throw new Error(`Tool '${toolCall.toolName}' not found in registry`);
-          }
-
-          // Execute tool with input and context
-          // NOTE: TypeScript cannot statically verify the relationship between toolCall.toolName
-          // and the correct input type because KG_TOOLS is a heterogeneous registry (each tool
-          // has different input/output types). Runtime safety is guaranteed by:
-          // 1. AI SDK validates toolCall.input against zod schemas before this callback
-          // 2. Tool implementations validate their inputs and return typed ToolResult<T>
-          // biome-ignore lint/suspicious/noExplicitAny: TypeScript limitation with heterogeneous tool registry, runtime type safety via zod
-          const result = await toolFn(toolCall.input as any, toolContext);
-
-          // Check if tool execution was successful
-          if (!result.success) {
-            throw new Error(result.error || 'Tool execution failed');
-          }
-
-          // Add successful output to chat (only the data, not the wrapper)
-          addToolOutput({
-            tool: toolCall.toolName,
-            toolCallId: toolCall.toolCallId,
-            // biome-ignore lint/suspicious/noExplicitAny: Output type matches the tool's return type, AI SDK handles downstream typing
-            output: result.data as any,
-          });
-
-          // Apply visual updates if tool returned them
-          if (result.visualUpdate) {
-            const { visualUpdate } = result;
-
-            // Highlight nodes
-            if (visualUpdate.highlightedNodes) {
-              for (const nodeId of visualUpdate.highlightedNodes) {
-                if (graph.hasNode(nodeId)) {
-                  graph.updateNodeAttributes(nodeId, attrs => {
-                    attrs.highlighted = true;
-                    attrs.zIndex = 100;
-                    return attrs;
-                  });
-                }
-              }
-            }
-
-            // Highlight edges
-            if (visualUpdate.highlightedEdges) {
-              for (const edgeId of visualUpdate.highlightedEdges) {
-                if (graph.hasEdge(edgeId)) {
-                  graph.updateEdgeAttributes(edgeId, attrs => {
-                    attrs.highlighted = true;
-                    attrs.zIndex = 100;
-                    return attrs;
-                  });
-                }
-              }
-            }
-
-            // Animate camera to target
-            if (visualUpdate.cameraTarget) {
-              const camera = currentSigmaInstance.getCamera();
-              camera.animate(
-                {
-                  x: visualUpdate.cameraTarget.x,
-                  y: visualUpdate.cameraTarget.y,
-                  ratio: visualUpdate.cameraTarget.ratio || 0.5,
-                },
-                { duration: 500 },
-              );
-            }
-
-            // Refresh sigma to apply visual changes
-            currentSigmaInstance.refresh();
-          }
-        } catch (error) {
-          // Handle errors gracefully - show error toast
-          const errorText = error instanceof Error ? error.message : String(error);
-          toast.error('Tool execution failed', {
-            description: errorText,
-            cancel: { label: 'Close', onClick() {} },
-          });
-
-          // Also add error output to chat for context
-          addToolOutput({
-            tool: toolCall.toolName,
-            toolCallId: toolCall.toolCallId,
-            state: 'output-error',
-            errorText,
-          });
-        }
       },
-    });
+    }),
+    onError(error) {
+      toast.error('Failed to fetch response from graph agent', {
+        cancel: { label: 'Close', onClick() {} },
+        description: error.message || 'Graph agent server is not responding. Please try again later.',
+      });
+    },
+  });
 
-  // Checkpoint management functions
+  React.useEffect(() => {
+    if (!sigmaInstance) {
+      return;
+    }
+
+    const applyActions = async () => {
+      for (const message of messages) {
+        if (message.role !== 'assistant') {
+          continue;
+        }
+
+        for (const part of message.parts) {
+          if (!isGraphActionsPart(part)) {
+            continue;
+          }
+
+          const actionBatchId = part.id ?? `${message.id}-graphActions`;
+          if (processedActionIds.current.has(actionBatchId)) {
+            continue;
+          }
+
+          processedActionIds.current.add(actionBatchId);
+
+          for (const action of part.data) {
+            if (action.type === 'load-subgraph') {
+              await applyOptimusGraph(
+                sigmaInstance,
+                action.graph,
+                action.mode,
+                action.highlightNodeIds ?? [],
+              );
+            } else if (action.type === 'highlight-path') {
+              highlightOptimusPath(sigmaInstance, action.nodeIds, action.edgeIds);
+            } else if (action.type === 'focus-nodes') {
+              focusOptimusNodes(sigmaInstance, action.nodeIds);
+            }
+          }
+        }
+      }
+    };
+
+    void applyActions();
+  }, [messages, sigmaInstance]);
+
   const createCheckpoint = React.useCallback((messageIndex: number) => {
     const checkpoint: CheckpointType = {
       id: `checkpoint-${Date.now()}-${messageIndex}`,
@@ -259,15 +293,13 @@ export function KGChat({ onChatOpen, children }: KGChatProps) {
       timestamp: new Date(),
       messageCount: messageIndex + 1,
     };
-    setCheckpoints(prev => [...prev, checkpoint]);
+    setCheckpoints((prev) => [...prev, checkpoint]);
   }, []);
 
   const restoreToCheckpoint = React.useCallback(
     (messageIndex: number) => {
-      // Restore messages to checkpoint state
       setMessages(messages.slice(0, messageIndex + 1));
-      // Remove checkpoints after this point
-      setCheckpoints(prev => prev.filter(cp => cp.messageIndex <= messageIndex));
+      setCheckpoints((prev) => prev.filter((cp) => cp.messageIndex <= messageIndex));
       toast.success('Checkpoint restored', {
         description: `Conversation restored to ${messageIndex + 1} messages`,
       });
@@ -284,14 +316,20 @@ export function KGChat({ onChatOpen, children }: KGChatProps) {
     }
 
     onChatOpen?.(true);
-    
-    // Get currently selected nodes from KG store
+
     const selectedNodes = useKGStore.getState().selectedNodes || [];
     const graph = useKGStore.getState().sigmaInstance?.getGraph();
-    const selectedNodeContext = selectedNodes.map(nodeId => {
+    const selectedNodeContext = selectedNodes.map((nodeId) => {
       const label = graph?.getNodeAttribute(nodeId, 'label') || nodeId;
       return { id: nodeId, label };
     });
+    const networkContext = graph
+      ? {
+          totalNodes: graph.order,
+          totalEdges: graph.size,
+          selectedNodeIds: selectedNodes,
+        }
+      : undefined;
 
     sendMessage(
       { text: message.text, files: message.files },
@@ -301,6 +339,7 @@ export function KGChat({ onChatOpen, children }: KGChatProps) {
           sessionId,
           userId: getUserId(),
           selectedNodeContext,
+          networkContext,
         },
       },
     );
@@ -309,6 +348,7 @@ export function KGChat({ onChatOpen, children }: KGChatProps) {
   const handleDeleteMessages = () => {
     setMessages([]);
     setCheckpoints([]);
+    processedActionIds.current.clear();
     onChatOpen?.(false);
   };
 
@@ -325,17 +365,16 @@ export function KGChat({ onChatOpen, children }: KGChatProps) {
     <Conversation className='h-full'>
       <ConversationContent>
         {messages.map((message, messageIndex) => {
-          const checkpoint = checkpoints.find(cp => cp.messageIndex === messageIndex);
-          const hasAttachments = message.parts.some(part => part.type === 'file');
+          const checkpoint = checkpoints.find((cp) => cp.messageIndex === messageIndex);
+          const hasAttachments = message.parts.some((part) => part.type === 'file');
 
           return (
             <React.Fragment key={message.id}>
               <div className='fade-in slide-in-from-bottom-10 animate-in duration-300'>
-                {/* Render attachments if present */}
                 {hasAttachments && (
                   <MessageAttachments className='mb-2'>
                     {message.parts
-                      .filter(part => part.type === 'file')
+                      .filter((part) => part.type === 'file')
                       .map((part, i) => (
                         <MessageAttachment key={`${message.id}-attachment-${i}`} data={part} />
                       ))}
@@ -396,37 +435,32 @@ export function KGChat({ onChatOpen, children }: KGChatProps) {
                         </Reasoning>
                       );
                     case 'file':
-                      // Files are rendered separately above
                       return null;
-                    default:
-                      // Tool-related parts (includes both 'dynamic-tool' and 'tool-*' types)
-                      if (
-                        (part.type === 'dynamic-tool' || part.type.startsWith('tool-')) &&
-                        'state' in part &&
-                        'input' in part
-                      ) {
-                        // biome-ignore lint/suspicious/noExplicitAny: Tool part types are complex unions from AI SDK
-                        const toolPart = part as any;
-                        const toolName =
-                          part.type === 'dynamic-tool' ? toolPart.toolName : part.type.replace('tool-', '');
-
-                        return (
-                          <Tool key={`${message.id}-${i}`} defaultOpen>
-                            {/* biome-ignore lint/suspicious/noExplicitAny: ToolUIPart type union requires type assertion for compatibility */}
-                            <ToolHeader title={toolName} type={part.type as any} state={toolPart.state} />
-                            <ToolContent>
-                              <ToolInput input={toolPart.input} />
-                              <ToolOutput output={toolPart.output} errorText={toolPart.errorText} />
-                            </ToolContent>
-                          </Tool>
-                        );
+                    case 'data-graphEvidence':
+                      if (!isGraphEvidencePart(part)) {
+                        return null;
                       }
+                      return <GraphEvidencePanel key={`${message.id}-${i}`} bundle={part.data} />;
+                    case 'data-graphActions':
+                      if (!isGraphActionsPart(part)) {
+                        return null;
+                      }
+                      return <GraphActionsPanel key={`${message.id}-${i}`} actions={part.data} />;
+                    case 'data-graphState':
+                      if (!isGraphStatePart(part)) {
+                        return null;
+                      }
+                      return (
+                        <div key={`${message.id}-${i}`} className='mt-2 ml-10 text-slate-500 text-xs'>
+                          Session: {part.data.sessionId} • Updated {new Date(part.data.state.updatedAt).toLocaleTimeString()}
+                        </div>
+                      );
+                    default:
                       return null;
                   }
                 })}
               </div>
 
-              {/* Render checkpoint if it exists at this message */}
               {checkpoint && (
                 <Checkpoint className='my-4'>
                   <CheckpointIcon />
@@ -438,20 +472,19 @@ export function KGChat({ onChatOpen, children }: KGChatProps) {
             </React.Fragment>
           );
         })}
-        {alert?.show && alert?.component}
+        {alert?.show && alert.component}
       </ConversationContent>
       <ConversationScrollButton />
     </Conversation>
   );
 
   const renderPromptInput = () => {
-    // Get the selected model data for display
-    const selectedModelData = LLM_MODELS.find(m => m.id === model);
+    const selectedModelData = LLM_MODELS.find((entry) => entry.id === model);
 
     return (
       <PromptInputProvider>
         <PromptInput globalDrop multiple onSubmit={handleSubmit} className='mx-2'>
-          <PromptInputAttachments>{attachment => <PromptInputAttachment data={attachment} />}</PromptInputAttachments>
+          <PromptInputAttachments>{(attachment) => <PromptInputAttachment data={attachment} />}</PromptInputAttachments>
           <PromptInputBody>
             <PromptInputTextarea ref={textareaRef} disabled={status === 'error'} />
           </PromptInputBody>
@@ -475,29 +508,25 @@ export function KGChat({ onChatOpen, children }: KGChatProps) {
                   <ModelSelectorInput placeholder='Search models...' />
                   <ModelSelectorList>
                     <ModelSelectorEmpty>No models found.</ModelSelectorEmpty>
-                    {['OpenAI', 'DeepSeek AI', 'Meta'].map(chef => (
+                    {['OpenAI', 'DeepSeek AI', 'Meta'].map((chef) => (
                       <ModelSelectorGroup heading={chef} key={chef}>
-                        {LLM_MODELS.filter(m => m.chef === chef).map(m => (
+                        {LLM_MODELS.filter((entry) => entry.chef === chef).map((entry) => (
                           <ModelSelectorItem
-                            key={m.id}
+                            key={entry.id}
                             onSelect={() => {
-                              setModel(m.id);
+                              setModel(entry.id);
                               setModelSelectorOpen(false);
                             }}
-                            value={m.id}
+                            value={entry.id}
                           >
-                            <ModelSelectorLogo provider={m.chefSlug} />
-                            <ModelSelectorName>{m.name}</ModelSelectorName>
+                            <ModelSelectorLogo provider={entry.chefSlug} />
+                            <ModelSelectorName>{entry.name}</ModelSelectorName>
                             <ModelSelectorLogoGroup>
-                              {m.providers.map(provider => (
+                              {entry.providers.map((provider) => (
                                 <ModelSelectorLogo key={provider} provider={provider} />
                               ))}
                             </ModelSelectorLogoGroup>
-                            {model === m.id ? (
-                              <CheckIcon className='ml-auto size-4' />
-                            ) : (
-                              <div className='ml-auto size-4' />
-                            )}
+                            {model === entry.id ? <CheckIcon className='ml-auto size-4' /> : <div className='ml-auto size-4' />}
                           </ModelSelectorItem>
                         ))}
                       </ModelSelectorGroup>

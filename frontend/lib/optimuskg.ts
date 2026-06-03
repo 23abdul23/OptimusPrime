@@ -183,6 +183,13 @@ function focusCameraOnNodes(
   );
 }
 
+export function focusOptimusNodes(
+  sigma: Sigma<NodeAttributes, EdgeAttributes>,
+  nodeIds: string[],
+) {
+  focusCameraOnNodes(sigma, sigma.getGraph(), nodeIds);
+}
+
 function mergeEdge(
   graph: Graph<NodeAttributes, EdgeAttributes>,
   key: string,

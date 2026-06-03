@@ -132,3 +132,138 @@ The frontend reads:
 - The importer uses the per-type parquet files under `optimusKG/nodes/` and `optimusKG/edges/` because they preserve nested property structures.
 - Raw node payloads can be retrieved on demand instead of copying every source field wholesale into Neo4j.
 - Large graph scans are handled as streamed or bounded operations where possible to avoid loading the biggest files fully into memory.
+
+## Graph-Agent Extraction Contract
+
+The graph-agent now treats the knowledge graph as the only source of truth for entity existence and resolution.
+
+### Extraction prompt
+
+```text
+You are a biomedical query extractor for a knowledge graph.
+
+Rules:
+- Extract only explicit text spans that appear verbatim in the user's latest message.
+- Never invent, infer, normalize, expand, alias, or rewrite biomedical entities.
+- If the user wrote "MAPT", output "MAPT" only. Do not add COMETT, tau, microtubule associated protein tau, or any related concept.
+- Do not use conversation memory, selected graph nodes, or prior answers as extracted entities.
+- Separate explicit entity mentions from broader concepts and from user intent.
+- If a query contains no explicit entity mention, return an empty mentions array.
+- Concepts must also be explicit spans from the user's text.
+- The knowledge graph is the only source of truth for entity existence and resolution.
+
+Return strict JSON only.
+```
+
+### JSON schema
+
+```json
+{
+  "type": "object",
+  "required": ["mentions", "concepts", "intent"],
+  "properties": {
+    "mentions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["text", "span", "typeHints", "source"],
+        "properties": {
+          "text": { "type": "string" },
+          "span": {
+            "type": "object",
+            "required": ["start", "end"],
+            "properties": {
+              "start": { "type": "integer" },
+              "end": { "type": "integer" }
+            }
+          },
+          "typeHints": { "type": "array", "items": { "type": "string" } },
+          "source": { "type": "string", "enum": ["query"] }
+        }
+      }
+    },
+    "concepts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["text", "span", "category", "source"],
+        "properties": {
+          "text": { "type": "string" },
+          "span": {
+            "type": "object",
+            "required": ["start", "end"],
+            "properties": {
+              "start": { "type": "integer" },
+              "end": { "type": "integer" }
+            }
+          },
+          "category": { "type": "string" },
+          "source": { "type": "string", "enum": ["query"] }
+        }
+      }
+    },
+    "intent": {
+      "type": "object",
+      "required": ["primary", "operation", "requestedEntityTypes", "allowContextFallback"],
+      "properties": {
+        "primary": { "type": "string" },
+        "operation": { "type": "string" },
+        "requestedEntityTypes": { "type": "array", "items": { "type": "string" } },
+        "allowContextFallback": { "type": "boolean" },
+        "radius": { "type": "integer" }
+      }
+    }
+  }
+}
+```
+
+### Intent taxonomy
+
+- `relationship-analysis`: explain how an explicit entity relates to current graph anchors
+- `path-search`: shortest-path or connection-finding queries
+- `entity-search`: find genes, proteins, drugs, or pathways linked to a resolved anchor
+- `drug-search`: approved or relevant drug lookup
+- `pathway-search`: pathway-oriented lookup
+- `guideline-search`: clinical guideline retrieval
+- `graph-expansion`: expand or redraw the visible graph
+- `neighborhood`: bounded local neighborhood retrieval
+- `comparison`: compare entities when explicitly named
+- `guarded-cypher`: execute validated read-only Cypher
+
+### Entity resolution workflow
+
+1. Extract only explicit mentions from the latest user text.
+2. Extract explicit concepts separately when the query is broad, such as `cancer` or `neurodegeneration`.
+3. Resolve mentions against OptimusKG search over names, aliases, synonyms, descriptions, and identifiers.
+4. Use concept resolution only when no explicit entity mentions were resolved.
+5. Use selected nodes or prior graph state only as planning context, never as extracted entities.
+6. If nothing resolves, return a graph-grounded partial answer instead of inventing entities.
+
+### Fallback handling for concept-only queries
+
+- `cancer genes`: no entity mention, concept is `cancer`, intent requests `Gene`
+- `approved drugs for Alzheimer's`: entity mention is `Alzheimer's`, intent requests `Drug`
+- `genes involved in neurodegeneration`: no entity mention, concept is `neurodegeneration`, intent requests `Gene`
+
+For concept-only queries, the system attempts KG-backed concept resolution. If the graph does not contain a usable anchor, the response must say that explicitly instead of fabricating one.
+
+### Biomedical KG examples
+
+- `How does MAPT gene come into the picture?`
+  Mention: `MAPT`
+  Intent: `relationship-analysis`
+  Context: prior resolved disease or selected graph anchor may be used only in planning
+
+- `approved drugs for Alzheimer's`
+  Mention: `Alzheimer's`
+  Intent: `drug-search`
+
+- `genes involved in neurodegeneration`
+  Mention: none
+  Concept: `neurodegeneration`
+  Intent: `entity-search`
+
+- `show the network including these genes also`
+  Mention: none
+  Intent: `graph-expansion`
+  Context fallback allowed from current graph state

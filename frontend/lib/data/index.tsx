@@ -20,25 +20,25 @@ export const FADED_EDGE_COLOR = 'rgb(204, 204, 204)';
 
 export const LLM_MODELS = [
   {
-    id: 'nvidia:openai/gpt-oss-120b',
-    name: 'GPT-OSS',
+    id: 'openai:gpt-4.1-mini',
+    name: 'GPT-4.1 Mini',
     chef: 'OpenAI',
     chefSlug: 'openai',
-    providers: ['nvidia'],
+    providers: ['openai'],
   },
   {
-    id: 'nvidia:meta/llama-3.3-70b-instruct',
-    name: 'Llama 3.3',
-    chef: 'Meta',
-    chefSlug: 'llama',
-    providers: ['nvidia'],
+    id: 'openai:gpt-4.1',
+    name: 'GPT-4.1',
+    chef: 'OpenAI',
+    chefSlug: 'openai',
+    providers: ['openai'],
   },
   {
-    id: 'nvidia:deepseek-ai/deepseek-r1-0528',
-    name: 'DeepSeek R1',
-    chef: 'DeepSeek AI',
-    chefSlug: 'deepseek-ai',
-    providers: ['nvidia'],
+    id: 'openai:gpt-4o-mini',
+    name: 'GPT-4o Mini',
+    chef: 'OpenAI',
+    chefSlug: 'openai',
+    providers: ['openai'],
   },
 ] as const;
 

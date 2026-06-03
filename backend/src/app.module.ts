@@ -11,6 +11,7 @@ import { RedisService } from '@/redis/redis.service';
 import { APP_PIPE } from '@nestjs/core';
 import { ZodValidationPipe } from 'nestjs-zod';
 import { OptimusKgModule } from './optimuskg/optimuskg.module';
+import { GraphAgentModule } from './graph-agent/graph-agent.module';
 
 function parseNeo4jUri(uri?: string): { scheme: Neo4jScheme; host: string; port: number } | null {
   if (!uri) {
@@ -68,6 +69,7 @@ function parseNeo4jUri(uri?: string): { scheme: Neo4jScheme; host: string; port:
       exports: [RedisService],
     },
     OptimusKgModule,
+    GraphAgentModule,
   ],
   providers: [
     {

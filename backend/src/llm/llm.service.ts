@@ -3,7 +3,6 @@ import { ConfigService } from '@nestjs/config';
 import {
   convertToModelMessages,
   createProviderRegistry,
-  ModelMessage,
   ProviderRegistryProvider,
   streamText,
   UIMessage,
@@ -17,13 +16,13 @@ import { tavily } from '@tavily/core';
 
 @Injectable()
 export class LlmService {
-  private modelRegistry: ProviderRegistryProvider<{ nvidia: OpenAICompatibleProvider }, ':'>;
+  private modelRegistry: ProviderRegistryProvider<{ openai: OpenAICompatibleProvider }, ':'>;
 
   private tavilyClient: ReturnType<typeof tavily> | null = null;
 
   constructor(private configService: ConfigService) {
-    if (!this.configService.get<string>('NVIDIA_API_KEY')) {
-      throw new Error('NVIDIA_API_KEY is not configured in environment variables');
+    if (!this.configService.get<string>('OPENAI_API_KEY')) {
+      throw new Error('OPENAI_API_KEY is not configured in environment variables');
     }
 
     // Initialize Tavily for web search (optional)
@@ -33,10 +32,10 @@ export class LlmService {
     }
 
     this.modelRegistry = createProviderRegistry({
-      nvidia: createOpenAICompatible({
-        name: 'nvidia',
-        apiKey: this.configService.get<string>('NVIDIA_API_KEY'),
-        baseURL: 'https://integrate.api.nvidia.com/v1',
+      openai: createOpenAICompatible({
+        name: 'openai',
+        apiKey: this.configService.get<string>('OPENAI_API_KEY'),
+        baseURL: 'https://api.openai.com/v1',
       }),
     });
   }
@@ -110,16 +109,11 @@ REMEMBER: You are driving a powerful visualization dashboard. Your tool calls di
   generateResponseStream(promptDto: PromptDto) {
     const model = promptDto.model || DEFAULT_MODEL;
 
-    // Convert messages to AI SDK format
-    const messages: ModelMessage[] = [
-      { role: 'system', content: this.SYSTEM_PROMPT },
-      ...convertToModelMessages((promptDto.messages as UIMessage[]) ?? []),
-    ];
-
     // Note: Langfuse tracing handled by experimental_telemetry + controller's observe() wrapper
     return streamText({
       model: this.modelRegistry.languageModel(model),
-      messages,
+      system: this.SYSTEM_PROMPT,
+      messages: convertToModelMessages((promptDto.messages as UIMessage[]) ?? []),
       temperature: 0,
       topP: 0.7,
       maxOutputTokens: 4096,
@@ -137,7 +131,7 @@ REMEMBER: You are driving a powerful visualization dashboard. Your tool calls di
    * Backend generates metadata via Tavily search, frontend provides graph data
    */
   generateKGChatStream(promptDto: PromptDto) {
-    const modelId = (promptDto.model || DEFAULT_MODEL) as `nvidia:${string}`;
+    const modelId = (promptDto.model || DEFAULT_MODEL) as `openai:${string}`;
 
     // Generate tools (backend-side)
     const tools = this.generateKGTools();
@@ -155,16 +149,11 @@ REMEMBER: You are driving a powerful visualization dashboard. Your tool calls di
     }
     console.log(systemPrompt);
 
-    // Convert messages to AI SDK format
-    const messages: ModelMessage[] = [
-      { role: 'system', content: systemPrompt },
-      ...convertToModelMessages((promptDto.messages as UIMessage[]) ?? []),
-    ];
-
     // Note: Langfuse tracing handled by experimental_telemetry + controller's observe() wrapper
     return streamText({
       model: this.modelRegistry.languageModel(modelId),
-      messages,
+      system: systemPrompt,
+      messages: convertToModelMessages((promptDto.messages as UIMessage[]) ?? []),
       tools,
       // Use stopWhen instead of maxSteps (AI SDK 5.0)
       stopWhen: stepCountIs(5), // Stop at step 10 if tools were called

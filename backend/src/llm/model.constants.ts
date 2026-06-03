@@ -2,9 +2,9 @@ import { z } from 'zod';
 import { createZodDto } from 'nestjs-zod';
 
 export const MODEL_DEFINITIONS = {
-  GPT_OSS: { provider: 'nvidia', name: 'openai/gpt-oss-120b' },
-  LLAMA_3: { provider: 'nvidia', name: 'meta/llama-3.3-70b-instruct' },
-  DEEPSEEK_R1: { provider: 'nvidia', name: 'deepseek-ai/deepseek-r1-0528' },
+  GPT_4_1_MINI: { provider: 'openai', name: 'gpt-4.1-mini' },
+  GPT_4_1: { provider: 'openai', name: 'gpt-4.1' },
+  GPT_4O_MINI: { provider: 'openai', name: 'gpt-4o-mini' },
 } as const;
 
 export type ModelKey = keyof typeof MODEL_DEFINITIONS;
@@ -23,8 +23,7 @@ export type ModelId = (typeof MODEL_IDS)[ModelKey];
 export const MODEL_ID_LIST = Object.values(MODEL_IDS);
 
 // Default model (can be changed in one place)
-// NOTE: Use GPT_OSS for tool calling support - Llama models have limited function calling support
-export const DEFAULT_MODEL: ModelId = MODEL_IDS.GPT_OSS;
+export const DEFAULT_MODEL: ModelId = MODEL_IDS.GPT_4_1_MINI;
 
 // Helper to resolve a model id safely by key
 export function getModelId(key: ModelKey): ModelId {
