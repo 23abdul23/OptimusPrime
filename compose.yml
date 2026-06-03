@@ -1,5 +1,19 @@
 name: optimusPrime
 services:
+  optimus-neo4j:
+    image: neo4j:5.26-community
+    container_name: optimus-neo4j
+    restart: 'always'
+    ports:
+      - "17474:7474"
+      - "17687:7687"
+    environment:
+      - NEO4J_AUTH=${OPTIMUS_NEO4J_USERNAME:-neo4j}/${OPTIMUS_NEO4J_PASSWORD:-optimus-password}
+    volumes:
+      - neo4j-data:/data
+      - neo4j-logs:/logs
+      - ./optimusKG.dump:/backups/optimusKG.dump:ro
+
   frontend:
     build:
       context: frontend
@@ -12,15 +26,6 @@ services:
     ports:
       - "3000:80"
 
-  gsea:
-    build: 
-      context: gsea
-      dockerfile: Dockerfile
-    image: ghcr.io/mizzoudbl/tbep-gsea
-    container_name: gsea
-    restart: 'always'
-    ports:
-      - "5000:5000"
   
   nestjs:
     build:
@@ -33,17 +38,15 @@ services:
     ports:
       - "4000:4000"
     depends_on:
+      - optimus-neo4j
       - redis
-      - clickhouse
     env_file:
       - backend/.env
     environment:
-      - NEO4J_URI=${OPTIMUS_NEO4J_URI:-bolt://host.docker.internal:17687}
+      - NEO4J_URI=${OPTIMUS_NEO4J_URI:-bolt://optimus-neo4j:7687}
       - NEO4J_USERNAME=${OPTIMUS_NEO4J_USERNAME:-neo4j}
       - NEO4J_PASSWORD=${OPTIMUS_NEO4J_PASSWORD:-optimus-password}
-      - NEO4J_DATABASE=${OPTIMUS_NEO4J_DATABASE:-neo4j}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - NEO4J_DATABASE=${OPTIMUS_NEO4J_DATABASE:-optimusKG}
   
   redis:
     image: redis:8.2-alpine
@@ -53,17 +56,7 @@ services:
     volumes:
       - redis-cache:/data
 
-  clickhouse:
-    image: clickhouse/clickhouse-server:25.8
-    container_name: optimus-clickhouse
-    restart: always
-    volumes:
-      - clickhouse-data:/var/lib/clickhouse
-      - ./scripts/data/backup:/backup
-    environment:
-      - CLICKHOUSE_USER=${CLICKHOUSE_USER}
-      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
-
 volumes:
+  neo4j-data:
+  neo4j-logs:
   redis-cache:
-  clickhouse-data:

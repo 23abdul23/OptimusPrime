@@ -4,9 +4,6 @@ import { GraphQLModule } from '@nestjs/graphql';
 import { join } from 'node:path';
 import { GraphqlService } from './graphql.service';
 import GraphQLJSON from 'graphql-type-json';
-import { ClickhouseModule } from '@/clickhouse/clickhouse.module';
-import { ClickhouseResolver, TargetResolver } from './clickhouse.resolver';
-import { DataLoaderModule } from '@/dataloader';
 import { ApolloDriver } from '@/utils/apollo';
 import { ConfigService } from '@nestjs/config';
 
@@ -23,9 +20,7 @@ import { ConfigService } from '@nestjs/config';
       }),
       inject: [ConfigService],
     }),
-    ClickhouseModule,
-    DataLoaderModule,
   ],
-  providers: [GraphqlResolver, ClickhouseResolver, TargetResolver, GraphqlService],
+  providers: [GraphqlResolver, GraphqlService],
 })
 export class GraphqlModule {}

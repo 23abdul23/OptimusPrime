@@ -9,7 +9,7 @@ Optimus Explorer is a Knowledge Graph explorer and visualization tool built over
 - inspect shortest paths between entities
 - visualize graph structure in a Sigma.js canvas
 - import and validate data from the `optimusKG/` parquet files
-- run the full local stack with Neo4j, Redis, backend, worker, and frontend
+- run the full local stack with Neo4j, Redis, backend, and frontend
 
 ## Repository Layout
 
@@ -17,13 +17,34 @@ Optimus Explorer is a Knowledge Graph explorer and visualization tool built over
 - `frontend/`: Next.js application for graph exploration and visualization
 - `packages/shared/`: shared types, enums, defaults, and utilities used across apps
 - `optimusKG/`: source parquet dataset used for import and lookup
-- `docker/` and `docker-compose.yml`: local infrastructure for Neo4j, Redis, backend, worker, and frontend
+- `compose.yml`: local infrastructure for Optimus Neo4j, Redis, backend, and frontend
 - `docs/`: architecture notes, generated schema output, and supporting documentation
 - `reports/`: generated reports and analysis outputs
 
 ## Quick Start
 
 ### Docker
+
+1. Copy `.env.example` to `.env` and use these Optimus Neo4j settings:
+
+```env
+OPTIMUS_NEO4J_USERNAME=neo4j
+OPTIMUS_NEO4J_PASSWORD=optimus-password
+OPTIMUS_NEO4J_DATABASE=optimusKG
+```
+
+2. Load the dump into the Neo4j Docker volume:
+
+```bash
+docker stop optimus-neo4j
+docker cp .\neo4j.dump optimus-neo4j:/data/neo4j.dump
+docker run --rm --volumes-from optimus-neo4j neo4j:5.26-community rm -rf /data/databases/neo4j /data/transactions/neo4j
+docker run --rm --volumes-from optimus-neo4j neo4j:5.26-community neo4j-admin database load neo4j --from-path=/data --overwrite-destination=true
+docker start optimus-neo4j
+docker exec optimus-neo4j cypher-shell -u neo4j -p optimus-password "MATCH (n) RETURN count(n) AS total_nodes;"
+```
+
+3. Start the stack:
 
 ```bash
 pnpm install
@@ -37,6 +58,7 @@ Open:
 - Neo4j Browser: `http://localhost:17474`
 
 Bolt runs on `bolt://localhost:17687` by default.
+The Neo4j credentials are `neo4j` / `optimus-password`, and the database name is `optimusKG`.
 
 ### Local Development
 
@@ -46,10 +68,10 @@ pnpm --filter @optimus/backend generate-schema
 pnpm dev
 ```
 
-For the full local workflow you will usually also want Neo4j and Redis running through Docker:
+For the full local workflow you will usually also want Optimus Neo4j and Redis running through Docker:
 
 ```bash
-docker compose up neo4j redis
+docker compose up optimus-neo4j redis
 ```
 
 ## Core Commands
@@ -99,7 +121,7 @@ The frontend reads:
 
 1. parquet data from `optimusKG/` is discovered and imported through the backend pipeline
 2. Neo4j stores the graph used for exploration queries
-3. Redis supports worker jobs, caching, and queue-backed operations
+3. Redis supports caching and queue-backed operations
 4. the backend exposes GraphQL and graph query endpoints
 5. the frontend renders the graph, node details, subgraphs, and shortest-path views
 

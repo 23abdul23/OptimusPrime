@@ -8,7 +8,6 @@ import { LlmModule } from './llm/llm.module';
 import { AlgorithmModule } from './algorithm/algorithm.module';
 import { RedisModule } from './redis/redis.module';
 import { RedisService } from '@/redis/redis.service';
-import { ClickhouseModule } from './clickhouse/clickhouse.module';
 import { APP_PIPE } from '@nestjs/core';
 import { ZodValidationPipe } from 'nestjs-zod';
 import { OptimusKgModule } from './optimuskg/optimuskg.module';
@@ -68,7 +67,6 @@ function parseNeo4jUri(uri?: string): { scheme: Neo4jScheme; host: string; port:
       global: true,
       exports: [RedisService],
     },
-    ClickhouseModule,
     OptimusKgModule,
   ],
   providers: [

@@ -10,3 +10,4 @@ scripts/**/*.native
 scripts/cypher/*.cypher
 *.dump
 __pycache__/
+optimusKG.dump
