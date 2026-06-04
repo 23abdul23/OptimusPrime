@@ -44,6 +44,16 @@ interface GraphTopologySummary {
   nodeTypeDistribution: Array<{
     type: string;
     count: number;
+    sampleLabels: string[];
+  }>;
+  dominantRelationships: Array<{
+    relation: string;
+    count: number;
+    coverage: number;
+  }>;
+  prominentComponents: Array<{
+    size: number;
+    dominantNodeTypes: string[];
   }>;
   density: number;
   ontologyDiagnostics: Array<{
@@ -146,12 +156,20 @@ export class GraphAnalysisService {
   }
 
   async summarizeSubgraph(nodeIds: string[], edgeIds: string[]): Promise<GraphAnalysisResult> {
-    const dedupedNodeIds = this.dedupeIds(nodeIds).slice(0, 120);
-    const dedupedEdgeIds = this.dedupeIds(edgeIds).slice(0, 240);
+    const dedupedNodeIds = this.dedupeIds(nodeIds).slice(0, 2000);
+    const dedupedEdgeIds = this.dedupeIds(edgeIds).slice(0, 5000);
     const { nodes, relationships } = await this.loadNodeSetSubgraph(
       dedupedNodeIds,
       dedupedEdgeIds,
-      240,
+      Math.min(
+        6000,
+        Math.max(
+          240,
+          dedupedNodeIds.length + dedupedEdgeIds.length,
+          dedupedNodeIds.length * 4,
+          dedupedEdgeIds.length * 2,
+        ),
+      ),
       { preferExplicitEdges: dedupedEdgeIds.length > 0 && dedupedNodeIds.length > 0 },
     );
 
@@ -170,32 +188,38 @@ export class GraphAnalysisService {
     });
     const sections = this.buildGraphSummarySections(graph, topology);
 
-    return {
-      items: [
-        {
-          id: `summarize-subgraph-${Date.now()}`,
-          kind: 'query',
-          title: 'Subgraph summary',
-          summary: sections.join('\n\n'),
-          score: 0.86,
-          nodeIds: graph.nodes.map((node) => node.key),
-          edgeIds: graph.edges.map((edge) => edge.key),
-          metadata: {
-            selectedNodeCount: topology.selectedNodeCount,
-            analyzedNodeCount: topology.analyzedNodeCount,
-            selectedEdgeCount: topology.selectedEdgeCount,
-            analyzedEdgeCount: topology.analyzedEdgeCount,
-            graphShape: topology.graphShape,
-            connectedComponents: topology.connectedComponents,
-            hubNodes: topology.hubNodes,
-            centralNodes: topology.centralNodes,
-            relationshipCounts: topology.relationshipCounts,
-            nodeTypeDistribution: topology.nodeTypeDistribution,
-            density: topology.density,
-            ontologyDiagnostics: topology.ontologyDiagnostics,
-          },
+    const items: GraphEvidenceItem[] = [
+      {
+        id: `summarize-subgraph-${Date.now()}`,
+        kind: 'query',
+        title: 'Subgraph summary',
+        summary: sections.join('\n\n'),
+        score: 0.86,
+        nodeIds: graph.nodes.map((node) => node.key),
+        edgeIds: graph.edges.map((edge) => edge.key),
+        metadata: {
+          selectedNodeCount: topology.selectedNodeCount,
+          analyzedNodeCount: topology.analyzedNodeCount,
+          selectedEdgeCount: topology.selectedEdgeCount,
+          analyzedEdgeCount: topology.analyzedEdgeCount,
+          graphShape: topology.graphShape,
+          connectedComponents: topology.connectedComponents,
+          prominentComponents: topology.prominentComponents,
+          hubNodes: topology.hubNodes,
+          centralNodes: topology.centralNodes,
+          relationshipCounts: topology.relationshipCounts,
+          dominantRelationships: topology.dominantRelationships,
+          nodeTypeDistribution: topology.nodeTypeDistribution,
+          density: topology.density,
+          ontologyDiagnostics: topology.ontologyDiagnostics,
         },
-      ],
+      },
+      ...this.buildNodeTypeEvidenceItems(graph, topology),
+      ...this.buildRelationshipEvidenceItems(topology, graph),
+    ];
+
+    return {
+      items,
       graph,
       highlightNodeIds: topology.centralNodes.map((node) => node.id),
       warnings: topology.ontologyDiagnostics.length
@@ -277,7 +301,12 @@ export class GraphAnalysisService {
   }
 
   async findHubNodes(nodeIds: string[]): Promise<GraphAnalysisResult> {
-    const { nodes, relationships } = await this.loadNodeSetSubgraph(this.dedupeIds(nodeIds).slice(0, 120), [], 240);
+    const scopedNodeIds = this.dedupeIds(nodeIds).slice(0, 2000);
+    const { nodes, relationships } = await this.loadNodeSetSubgraph(
+      scopedNodeIds,
+      [],
+      Math.min(6000, Math.max(240, scopedNodeIds.length * 4)),
+    );
     const graph = serializeGraphFromRecords(nodes, relationships, {
       retrieval: 'graph-analysis:hub-nodes',
     });
@@ -302,7 +331,12 @@ export class GraphAnalysisService {
   }
 
   async findBridgingNodes(nodeIds: string[]): Promise<GraphAnalysisResult> {
-    const { nodes, relationships } = await this.loadNodeSetSubgraph(this.dedupeIds(nodeIds).slice(0, 120), [], 240);
+    const scopedNodeIds = this.dedupeIds(nodeIds).slice(0, 2000);
+    const { nodes, relationships } = await this.loadNodeSetSubgraph(
+      scopedNodeIds,
+      [],
+      Math.min(6000, Math.max(240, scopedNodeIds.length * 4)),
+    );
     const graph = serializeGraphFromRecords(nodes, relationships, {
       retrieval: 'graph-analysis:bridging-nodes',
     });
@@ -604,7 +638,7 @@ export class GraphAnalysisService {
   ): GraphTopologySummary {
     const adjacency = new Map<string, Set<string>>();
     const relationByNode = new Map<string, Set<string>>();
-    const typeCounts = new Map<string, number>();
+    const typeCounts = new Map<string, { count: number; sampleLabels: string[] }>();
     const relationshipCounts = new Map<string, number>();
     const degreeByNode = new Map<string, number>();
 
@@ -612,7 +646,13 @@ export class GraphAnalysisService {
       adjacency.set(node.key, new Set());
       relationByNode.set(node.key, new Set());
       const type = String(node.attributes.nodeType ?? node.attributes.typeCode ?? 'Entity');
-      typeCounts.set(type, (typeCounts.get(type) ?? 0) + 1);
+      const existingType = typeCounts.get(type) ?? { count: 0, sampleLabels: [] };
+      existingType.count += 1;
+      const label = String(node.attributes.label ?? node.key);
+      if (existingType.sampleLabels.length < 5 && !existingType.sampleLabels.includes(label)) {
+        existingType.sampleLabels.push(label);
+      }
+      typeCounts.set(type, existingType);
     }
 
     for (const edge of graph.edges) {
@@ -652,6 +692,17 @@ export class GraphAnalysisService {
       .map(({ descriptionBoost: _descriptionBoost, ...rest }) => rest);
     const density =
       graph.nodes.length > 1 ? (2 * graph.edges.length) / (graph.nodes.length * (graph.nodes.length - 1)) : 0;
+    const nodeTypeDistribution = [...typeCounts.entries()]
+      .sort((a, b) => b[1].count - a[1].count || a[0].localeCompare(b[0]))
+      .map(([type, value]) => ({ type, count: value.count, sampleLabels: value.sampleLabels }));
+    const dominantRelationships = [...relationshipCounts.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, 8)
+      .map(([relation, count]) => ({
+        relation,
+        count,
+        coverage: graph.edges.length > 0 ? count / graph.edges.length : 0,
+      }));
 
     return {
       selectedNodeCount: counts.selectedNodeCount ?? graph.nodes.length,
@@ -671,9 +722,9 @@ export class GraphAnalysisService {
       relationshipCounts: [...relationshipCounts.entries()]
         .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
         .map(([relation, count]) => ({ relation, count })),
-      nodeTypeDistribution: [...typeCounts.entries()]
-        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-        .map(([type, count]) => ({ type, count })),
+      nodeTypeDistribution,
+      dominantRelationships,
+      prominentComponents: this.buildProminentComponents(graph, connectedComponents, nodeTypeDistribution),
       density,
       ontologyDiagnostics: this.detectOntologyTypeIssues(graph.nodes),
     };
@@ -686,12 +737,12 @@ export class GraphAnalysisService {
         : `Graph Overview: The analyzed graph contains ${topology.analyzedNodeCount} node${topology.analyzedNodeCount === 1 ? '' : 's'} and ${topology.analyzedEdgeCount} edge${topology.analyzedEdgeCount === 1 ? '' : 's'}.`;
     const keyEntities = `Key Entities: ${this.summarizeKeyEntities(graph, topology)}.`;
     const graphStructure = `Graph Structure: ${topology.graphShape} with ${topology.connectedComponents.length} connected component${topology.connectedComponents.length === 1 ? '' : 's'}${topology.connectedComponents.length > 0 ? ` (largest component size ${topology.connectedComponents[0].size})` : ''}. Node-type distribution: ${topology.nodeTypeDistribution
-      .slice(0, 5)
+      .slice(0, 10)
       .map(({ type, count }) => `${type} (${count})`)
       .join(', ') || 'not available'}.`;
-    const majorRelationshipTypes = `Major Relationship Types: ${topology.relationshipCounts
-      .slice(0, 6)
-      .map(({ relation, count }) => `${relation} (${count})`)
+    const majorRelationshipTypes = `Major Relationship Types: ${topology.dominantRelationships
+      .slice(0, 8)
+      .map(({ relation, count, coverage }) => `${relation} (${count}, ${(coverage * 100).toFixed(1)}%)`)
       .join(', ') || 'none identified'}.`;
     const centralNodes = `Central Nodes: ${topology.centralNodes
       .slice(0, 5)
@@ -745,6 +796,16 @@ export class GraphAnalysisService {
     }
     if (hasPathways && hasGenes) {
       return 'the selected graph mixes molecular entities with pathway context, suggesting a mechanism-oriented module';
+    }
+    if (topology.nodeTypeDistribution.length > 0) {
+      const dominantTypes = topology.nodeTypeDistribution
+        .slice(0, 3)
+        .map(({ type }) => type)
+        .join(', ');
+      return `${topology.graphShape} graph dominated by ${dominantTypes} nodes and ${topology.dominantRelationships
+        .slice(0, 3)
+        .map(({ relation }) => relation)
+        .join(', ') || 'graph relationships'}`;
     }
 
     return `${topology.graphShape} centered on ${topLabel || 'the selected entities'} with ${topType} nodes connected through ${topology.relationshipCounts
@@ -909,6 +970,88 @@ export class GraphAnalysisService {
       .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
       .slice(0, 6)
       .map(([type, count]) => ({ type, count }));
+  }
+
+  private buildNodeTypeEvidenceItems(graph: SerializedGraphPayload, topology: GraphTopologySummary) {
+    return topology.nodeTypeDistribution.slice(0, 12).map((entry, index) => {
+      const typedNodes = graph.nodes.filter((node) => {
+        const nodeType = String(node.attributes.nodeType ?? node.attributes.typeCode ?? 'Entity');
+        return nodeType === entry.type;
+      });
+
+      return {
+        id: `node-type-summary-${index}-${entry.type}`,
+        kind: 'query' as const,
+        title: `${entry.type} nodes present in graph`,
+        summary: `${entry.type} appears ${entry.count} time${entry.count === 1 ? '' : 's'} in the visible graph. Example nodes: ${entry.sampleLabels.slice(0, 6).join(', ') || 'none available'}.`,
+        score: 0.74,
+        nodeIds: typedNodes.slice(0, 20).map((node) => node.key),
+        edgeIds: graph.edges
+          .filter((edge) => typedNodes.some((node) => node.key === edge.source || node.key === edge.target))
+          .slice(0, 40)
+          .map((edge) => edge.key),
+        metadata: {
+          nodeType: entry.type,
+          count: entry.count,
+          sampleLabels: entry.sampleLabels,
+        },
+      };
+    });
+  }
+
+  private buildRelationshipEvidenceItems(topology: GraphTopologySummary, graph: SerializedGraphPayload) {
+    return topology.dominantRelationships.slice(0, 8).map((entry, index) => ({
+      id: `relationship-summary-${index}-${entry.relation}`,
+      kind: 'relation' as const,
+      title: `${entry.relation} relationships in graph`,
+      summary: `${entry.relation} appears ${entry.count} time${entry.count === 1 ? '' : 's'} and covers ${(entry.coverage * 100).toFixed(1)}% of the visible graph relationships.`,
+      score: 0.72,
+      nodeIds: graph.edges
+        .filter((edge) => String(edge.attributes.relation ?? edge.attributes.edgeType ?? edge.attributes.label ?? 'RELATED_TO') === entry.relation)
+        .slice(0, 20)
+        .flatMap((edge) => [edge.source, edge.target]),
+      edgeIds: graph.edges
+        .filter((edge) => String(edge.attributes.relation ?? edge.attributes.edgeType ?? edge.attributes.label ?? 'RELATED_TO') === entry.relation)
+        .slice(0, 40)
+        .map((edge) => edge.key),
+      metadata: {
+        relation: entry.relation,
+        count: entry.count,
+        coverage: entry.coverage,
+      },
+    }));
+  }
+
+  private buildProminentComponents(
+    graph: SerializedGraphPayload,
+    components: Array<{ size: number; nodeIds: string[] }>,
+    nodeTypeDistribution: Array<{ type: string; count: number; sampleLabels: string[] }>,
+  ) {
+    if (components.length === 0) {
+      return [];
+    }
+
+    return components.slice(0, 6).map((component) => {
+      const typeCounts = new Map<string, number>();
+      for (const nodeId of component.nodeIds) {
+        const node = graph.nodes.find((candidate) => candidate.key === nodeId);
+        if (!node) {
+          continue;
+        }
+        const nodeType = String(node.attributes.nodeType ?? node.attributes.typeCode ?? 'Entity');
+        typeCounts.set(nodeType, (typeCounts.get(nodeType) ?? 0) + 1);
+      }
+
+      const dominantNodeTypes = [...typeCounts.entries()]
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .slice(0, 3)
+        .map(([type]) => type);
+
+      return {
+        size: component.size,
+        dominantNodeTypes: dominantNodeTypes.length > 0 ? dominantNodeTypes : nodeTypeDistribution.slice(0, 3).map(({ type }) => type),
+      };
+    });
   }
 
   private dedupeIds(values: string[]) {

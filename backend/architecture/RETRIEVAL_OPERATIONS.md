@@ -1,43 +1,45 @@
 # Retrieval Operations
 
-## Current State
+## Summary
 
-Current retrieval planning emits tool steps directly, and the retriever executes them step by step.
+The graph agent uses operation-first retrieval planning. The planner emits typed operations, and `GraphRetrieverService` dispatches them to either graph analysis, retrieval operations, or guarded Cypher.
 
-Examples already present:
+## Execution Layers
 
-- node metadata lookup
-- direct relation lookup
-- shortest path lookup
-- typed path traversal
-- neighborhood retrieval
-- graph expansion
+```text
+RetrievalPlanningAgentService
+        ↓
+GraphRetrieverService
+    ├─ GraphAnalysisService
+    ├─ RetrievalOperationsService
+    └─ CypherAgentService
+```
 
-## Current Limitation
+## Retrieval Executors
 
-Planner logic and retrieval-operation choice are still coupled. This makes graph-query routing and graph-context-aware planning harder to evolve.
+### graph-analysis
 
-## Target Direction
+Used when the subject is the selected graph, visible graph, or another graph-native structure.
 
-The planner should emit reusable graph operations such as:
+Supported operations:
 
-- `getRelatedDiseases`
-- `getRelatedGenes`
-- `getRelatedProteins`
-- `getRelatedPathways`
-- `getRelatedDrugs`
-- `getDrugIndications`
-- `findShortestPath`
-- `findCommonNeighbors`
-- `retrieveEvidence`
+- `summarize-selected-nodes`
+- `summarize-visible-subgraph`
+- `compare-nodes`
+- `find-shared-pathways`
+- `find-shared-diseases`
+- `find-shared-genes`
+- `find-common-neighbors`
+- `find-hub-nodes`
+- `find-bridging-nodes`
+- `explain-connections`
+- `analyze-cluster`
 
-Those operations then map to Neo4j/OptimusKG queries in a dedicated layer.
+### retrieval-operations
 
-## Phase 7 Implementation
+Used for entity-centric retrieval and bounded graph traversal.
 
-Phase 7 introduces `RetrievalOperationsService`.
-
-Implemented operations include:
+Supported operations:
 
 - `load-node-details`
 - `get-related-diseases`
@@ -52,8 +54,49 @@ Implemented operations include:
 - `retrieve-neighborhood`
 - `expand-network`
 
-Execution notes:
+### cypher-agent
 
-- retrieval planning is now operation-first
-- `GraphRetrieverService` coordinates execution but does not own entity-centric retrieval logic
-- Neo4j-backed retrieval operations execute through `CypherAgentService` when Cypher templates are required
+Used only for guarded explicit Cypher execution.
+
+Supported operation:
+
+- `execute-custom-cypher`
+
+## Planning Rules
+
+### Graph-Subject Queries
+
+If the user’s subject is the graph itself, the planner should prefer graph-analysis directly.
+
+Examples:
+
+- `Summarize the network`
+- `What biological relationships dominate this network?`
+- `Which nodes are the main hubs in this graph?`
+- `What molecular functions are present in the graph?`
+
+These should not require entity anchors if the visible graph is available.
+
+### Entity-Subject Queries
+
+If the subject is a resolved biomedical entity, the planner should use retrieval operations.
+
+Examples:
+
+- `For which diseases is Metformin indicated?`
+- `Which genes are associated with Alzheimer disease?`
+- `How is APOE related to amyloid beta?`
+
+### Mixed Queries
+
+If the query combines graph context with explicit entity mentions, the planner can mix graph analysis and entity-centric retrieval.
+
+Example:
+
+- `How do these selected genes relate to Parkinson disease?`
+
+## Current Constraints
+
+- planning is heuristic but typed
+- visible-graph analysis depends on the frontend sending full visible graph context
+- graph-analysis relies on the node and edge metadata available in serialized graph payloads

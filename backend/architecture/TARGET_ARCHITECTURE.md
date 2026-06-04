@@ -1,52 +1,86 @@
 # Target Architecture
 
-## Goal
+## Purpose
 
-Move from a vertically-scaled sequential graph agent to a graph-native orchestration model built from specialized deterministic sub-agents under a single orchestrator.
+This file describes the intended steady-state architecture for the current graph agent. It is not a speculative redesign from scratch. It is the target shape that the current implementation is already moving toward and largely reflects the implemented service boundaries.
 
-The target system is **not** a swarm of autonomous agents.
-
-It is a horizontally-specialized architecture with typed interfaces and deterministic routing.
-
-## Target Components
+## Target Shape
 
 ```text
+Frontend Graph UI + KG Chat
+        ↓
+Graph-Agent API
+        ↓
+GraphAgentService (orchestrator)
+        ↓
 Query Router
+        ↓
 Graph Context Agent
+        ↓
 Intent Agent
-Entity Mention Agent
-Entity Resolution Agent
+        ↓
+Optional Mention Extraction
+        ↓
+Optional Entity Resolution
+        ↓
 Retrieval Planning Agent
-Retrieval Operations Layer
-Cypher Agent
-Graph Analysis Layer
+        ↓
+Execution Coordinator
+    ├─ Graph Analysis Layer
+    ├─ Retrieval Operations Layer
+    └─ Guarded Cypher Layer
+        ↓
 Evidence Agent
+        ↓
+Replanning Loop
+        ↓
 Reasoning Agent
+        ↓
+Streamed Answer + Graph Actions + Graph State
 ```
 
-## Design Principles
+## Target Properties
 
-- Graph context is a first-class input modality.
-- Entity mentions are extracted without normalization or inference.
-- Intent is identified before retrieval planning.
-- Planner emits graph operations, not raw Cypher.
-- Retrieval operations are reusable and testable.
-- Cypher is a controlled fallback, not the default interface.
-- Evidence ranking is separate from graph retrieval.
-- Answer generation is grounded in retrieved evidence only.
+### 1. Graph-First Reasoning
 
-## Migration Plan
+- the graph, not the LLM, is the primary substrate for biomedical reasoning
+- visible graph context is a valid subject even without explicit selected nodes
 
-- Phase 0: architecture documentation
-- Phase 1: Query Router
-- Phase 2: Graph Context Agent
-- Later phases:
-  - graph analysis layer
-  - intent split
-  - entity resolution refactor
-  - retrieval planning refactor
-  - retrieval operations layer
-  - Cypher agent
-  - evidence agent hardening
-  - re-planning loop
-  - reasoning agent
+### 2. Conditional Entity Work
+
+- extraction should run only when needed
+- resolution should run only when needed
+- graph-subject queries should not be forced through entity resolution
+
+### 3. Operation-First Planning
+
+- the planner should emit typed operations
+- execution should be delegated to the correct layer
+
+### 4. Schema-Aware Graph Analysis
+
+- graph analysis should work across all node types present in the graph
+- summaries should use topology, node-type distribution, relationship distribution, and node metadata
+
+### 5. Structured Outputs
+
+The backend should stream:
+
+- answer text
+- graph evidence bundle
+- graph actions
+- updated graph state
+
+### 6. Stateful Follow-Up Handling
+
+- session graph state should support follow-up questions
+- current selection and visible graph should still outrank older session memory
+
+## Near-Term Direction
+
+The remaining architectural work should continue to strengthen:
+
+- visible-graph-native analysis
+- schema-aware summaries across all ontology categories
+- explicit graph-wide analytic intents
+- planner coverage for graph-wide follow-up questions

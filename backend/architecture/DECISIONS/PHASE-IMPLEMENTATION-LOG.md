@@ -286,6 +286,39 @@ Changed files:
 - `backend/src/graph-agent/entity-resolution-agent.service.ts`
 - `backend/src/graph-agent/query-router.service.ts`
 - `backend/src/graph-agent/retrieval-planning-agent.service.ts`
+
+## Post-Phase 11 Visible-Graph Analysis Hardening
+
+Completed:
+
+- changed the KG chat payload builder to send full visible-graph context rather than a small sampled subset for graph-wide analysis
+- changed graph-wide intent classification so visible-network analytical questions such as:
+  - `Summarize the network`
+  - `What biological relationships dominate this network?`
+  - `What molecular functions are present in the graph?`
+  route into graph-analysis instead of falling through to neighborhood retrieval
+- changed retrieval planning so graph-summary questions over the visible graph can emit direct graph-analysis steps without requiring explicit selected anchors
+- expanded visible-graph graph-analysis to compute and expose:
+  - node-type distribution
+  - per-type sample entities
+  - relationship distribution
+  - dominant relationship coverage
+  - hub and central nodes
+  - component / cluster summaries
+  - schema-aware ontology diagnostics
+- removed small-node / small-edge caps from visible-subgraph analysis so the backend can analyze the currently rendered graph at practical KG sizes
+
+Changed files:
+
+- `frontend/components/chat/KGChat.tsx`
+- `backend/src/graph-agent/intent-agent.service.ts`
+- `backend/src/graph-agent/retrieval-planning-agent.service.ts`
+- `backend/src/graph-agent/graph-analysis.service.ts`
+- `backend/architecture/TOOLS.md`
+- `backend/architecture/GRAPH_CONTEXT_MODEL.md`
+- `backend/architecture/RETRIEVAL_OPERATIONS.md`
+- `backend/architecture/AGENTS.md`
+- `backend/architecture/EXECUTION_FLOW.md`
 - `backend/src/graph-agent/graph-agent.service.ts`
 - `backend/src/graph-agent/graph-context-agent.service.ts`
 - `backend/src/graph-agent/graph-agent.types.ts`

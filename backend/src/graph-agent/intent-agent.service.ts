@@ -40,7 +40,10 @@ export class IntentAgentService {
     }
 
     if (queryRoute.category === 'GRAPH_QUERY' || queryRoute.category === 'MIXED_QUERY') {
-      if (/\bsummariz(?:e|ing)\b|\bdescribe\b|\bexplain this subgraph\b|\bexplain these nodes\b/.test(normalized)) {
+      if (
+        /\bsummariz(?:e|ing)\b|\bdescribe\b|\bexplain this subgraph\b|\bexplain these nodes\b/.test(normalized) ||
+        this.isGraphWideAnalysisQuery(normalized)
+      ) {
         return {
           primary: 'graph-summary',
           operation: 'graph-summary',
@@ -227,5 +230,26 @@ export class IntentAgentService {
     }
 
     return [...requestedEntityTypes];
+  }
+
+  private isGraphWideAnalysisQuery(normalizedQuery: string) {
+    return (
+      /\bnetwork\b|\bgraph\b|\bsubgraph\b/.test(normalizedQuery) &&
+      (
+        /\brelationships?\b.*\bdominat/.test(normalizedQuery) ||
+        /\bdominant\b.*\brelationships?\b/.test(normalizedQuery) ||
+        /\bhubs?\b/.test(normalizedQuery) ||
+        /\bcentral\b/.test(normalizedQuery) ||
+        /\bclusters?\b/.test(normalizedQuery) ||
+        /\bcomponents?\b/.test(normalizedQuery) ||
+        /\btopology\b/.test(normalizedQuery) ||
+        /\bnode types?\b/.test(normalizedQuery) ||
+        /\bwhat .* are present\b/.test(normalizedQuery) ||
+        /\bmolecular functions?\b/.test(normalizedQuery) ||
+        /\bcellular components?\b/.test(normalizedQuery) ||
+        /\banatom(y|ical)\b/.test(normalizedQuery) ||
+        /\bphenotypes?\b/.test(normalizedQuery)
+      )
+    );
   }
 }

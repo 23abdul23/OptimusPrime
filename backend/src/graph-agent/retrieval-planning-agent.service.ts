@@ -64,6 +64,8 @@ export class RetrievalPlanningAgentService {
     ).slice(0, 120);
     const graphAnalysisNodeIds = queryRoute.category === 'MIXED_QUERY' ? mixedGraphNodeIds : graphNodeIds;
     const graphAnalysisEdgeIds = graphContext.selectedEdges.map((edge) => edge.id).slice(0, 240);
+    const visibleGraphNodeIds = graphContext.visibleNodeIds.slice(0, 2000);
+    const visibleGraphEdgeIds = graphContext.visibleEdgeIds.slice(0, 5000);
 
     if (normalized.includes('cypher') || normalized.includes('query language')) {
       return [
@@ -81,7 +83,7 @@ export class RetrievalPlanningAgentService {
 
     if ((queryRoute.category === 'GRAPH_QUERY' || queryRoute.category === 'MIXED_QUERY') && intent.operation === 'graph-summary') {
       if (graphAnalysisNodeIds.length > 0) {
-        return [
+        const steps: RetrievalPlanStep[] = [
           this.createStep({
             prefix: 'graph-summary',
             intent: 'graph-summary',
@@ -100,14 +102,50 @@ export class RetrievalPlanningAgentService {
             },
           }),
         ];
+
+        if (/\bhubs?\b|\bcentral\b/.test(normalized)) {
+          steps.push(
+            this.createStep({
+              prefix: 'graph-hubs',
+              intent: 'graph-summary',
+              operation: 'find-hub-nodes',
+              executor: 'graph-analysis',
+              tool: 'findHubNodes',
+              description: 'Identify hub and central nodes in the current graph context.',
+              params: {
+                nodeIds: graphAnalysisNodeIds,
+              },
+            }),
+          );
+        }
+
+        if (/\bclusters?\b|\bcomponents?\b|\btopology\b/.test(normalized)) {
+          steps.push(
+            this.createStep({
+              prefix: 'graph-clusters',
+              intent: 'graph-summary',
+              operation: 'analyze-cluster',
+              executor: 'graph-analysis',
+              tool: 'analyzeCluster',
+              description: 'Analyze cluster structure and component topology in the current graph context.',
+              params: {
+                nodeIds: graphAnalysisNodeIds,
+              },
+            }),
+          );
+        }
+
+        return steps;
       }
 
       if (
         graphContext.graphScope.mode === 'visible-subgraph' ||
-        graphContext.visibleNodeIds.length > 0 ||
+        visibleGraphNodeIds.length > 0 ||
         state.visibleNodeIds.length > 0
       ) {
-        return [
+        const nodeIds = visibleGraphNodeIds.length > 0 ? visibleGraphNodeIds : state.visibleNodeIds;
+        const edgeIds = visibleGraphEdgeIds.length > 0 ? visibleGraphEdgeIds : state.visibleEdgeIds;
+        const steps: RetrievalPlanStep[] = [
           this.createStep({
             prefix: 'subgraph-summary',
             intent: 'graph-summary',
@@ -116,11 +154,45 @@ export class RetrievalPlanningAgentService {
             tool: 'summarizeSubgraph',
             description: 'Summarize the currently visible subgraph.',
             params: {
-              nodeIds: (graphContext.visibleNodeIds.length > 0 ? graphContext.visibleNodeIds : state.visibleNodeIds).slice(0, 120),
-              edgeIds: (graphContext.visibleEdgeIds.length > 0 ? graphContext.visibleEdgeIds : state.visibleEdgeIds).slice(0, 240),
+              nodeIds,
+              edgeIds,
             },
           }),
         ];
+
+        if (/\bhubs?\b|\bcentral\b|\bdominant\b/.test(normalized)) {
+          steps.push(
+            this.createStep({
+              prefix: 'visible-graph-hubs',
+              intent: 'graph-summary',
+              operation: 'find-hub-nodes',
+              executor: 'graph-analysis',
+              tool: 'findHubNodes',
+              description: 'Identify hub and central nodes in the visible graph.',
+              params: {
+                nodeIds,
+              },
+            }),
+          );
+        }
+
+        if (/\bclusters?\b|\bcomponents?\b|\btopology\b/.test(normalized)) {
+          steps.push(
+            this.createStep({
+              prefix: 'visible-graph-clusters',
+              intent: 'graph-summary',
+              operation: 'analyze-cluster',
+              executor: 'graph-analysis',
+              tool: 'analyzeCluster',
+              description: 'Analyze cluster structure and components in the visible graph.',
+              params: {
+                nodeIds,
+              },
+            }),
+          );
+        }
+
+        return steps;
       }
     }
 

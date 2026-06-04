@@ -718,6 +718,19 @@ function buildGraphAgentContext(
   sigmaInstance: ReturnType<typeof useKGStore.getState>['sigmaInstance'],
 ) {
   const graph = sigmaInstance?.getGraph();
+  const visibleNodeIds = graph ? graph.filterNodes((nodeId) => graph.getNodeAttribute(nodeId, 'hidden') !== true) : [];
+  const visibleNodeIdSet = new Set(visibleNodeIds);
+  const visibleEdgeIds = graph
+    ? graph.filterEdges((edgeId) => {
+        if (graph.getEdgeAttribute(edgeId, 'hidden') === true) {
+          return false;
+        }
+
+        const source = graph.source(edgeId);
+        const target = graph.target(edgeId);
+        return visibleNodeIdSet.has(source) && visibleNodeIdSet.has(target);
+      })
+    : [];
   const selectedNodeContext: GraphSelectionNodeContext[] = selectedNodes.map((nodeId) => {
     const label = graph?.getNodeAttribute(nodeId, 'label') || nodeId;
     const nodeType =
@@ -742,16 +755,13 @@ function buildGraphAgentContext(
 
   const networkContext: GraphNetworkContext | undefined = graph
     ? {
-        totalNodes: graph.order,
-        totalEdges: graph.size,
+        totalNodes: visibleNodeIds.length,
+        totalEdges: visibleEdgeIds.length,
         selectedNodeIds: selectedNodes,
         selectedEdgeIds: selectedEdges,
-        visibleNodeIds: graph.nodes().slice(0, 160),
-        visibleEdgeIds: graph.edges().slice(0, 320),
-        visibleNodeContext: graph
-          .nodes()
-          .slice(0, 160)
-          .map((nodeId) => ({
+        visibleNodeIds,
+        visibleEdgeIds,
+        visibleNodeContext: visibleNodeIds.map((nodeId) => ({
             id: nodeId,
             label: String(graph.getNodeAttribute(nodeId, 'label') ?? nodeId),
             nodeType:
@@ -760,7 +770,7 @@ function buildGraphAgentContext(
           })),
         topNodeTypes: (() => {
           const counts = new Map<string, number>();
-          graph.forEachNode((nodeId) => {
+          visibleNodeIds.forEach((nodeId) => {
             const nodeType = String(
               graph.getNodeAttribute(nodeId, 'nodeType') ?? graph.getNodeAttribute(nodeId, 'typeCode') ?? 'Entity',
             );
@@ -769,7 +779,7 @@ function buildGraphAgentContext(
 
           return [...counts.entries()]
             .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-            .slice(0, 6)
+            .slice(0, 12)
             .map(([type, count]) => ({ type, count }));
         })(),
       }
