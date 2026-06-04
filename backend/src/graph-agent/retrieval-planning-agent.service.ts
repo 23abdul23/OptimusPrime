@@ -52,6 +52,17 @@ export class RetrievalPlanningAgentService {
     const expansionSeedNodeIds = this.pickExpansionSeeds(resolvedEntities, primary, state, graphContext);
     const expansionNodeTypes = this.pickExpansionNodeTypes(query, intent, resolvedEntities);
     const graphNodeIds = seedEntities.map((entity) => entity.id).slice(0, 12);
+    const mixedGraphNodeIds = Array.from(
+      new Set(
+        [
+          ...graphNodeIds,
+          ...explicitEntities.map((entity) => entity.id),
+          ...conceptResolvedEntities.map((entity) => entity.id),
+          ...contextAnchors.map((entity) => entity.id),
+        ].filter((nodeId) => nodeId.length > 0),
+      ),
+    ).slice(0, 12);
+    const graphAnalysisNodeIds = queryRoute.category === 'MIXED_QUERY' ? mixedGraphNodeIds : graphNodeIds;
 
     if (normalized.includes('cypher') || normalized.includes('query language')) {
       return [
@@ -67,8 +78,8 @@ export class RetrievalPlanningAgentService {
       ];
     }
 
-    if (queryRoute.category === 'GRAPH_QUERY' && intent.operation === 'graph-summary') {
-      if (graphNodeIds.length > 0) {
+    if ((queryRoute.category === 'GRAPH_QUERY' || queryRoute.category === 'MIXED_QUERY') && intent.operation === 'graph-summary') {
+      if (graphAnalysisNodeIds.length > 0) {
         return [
           this.createStep({
             prefix: 'graph-summary',
@@ -76,9 +87,9 @@ export class RetrievalPlanningAgentService {
             operation: 'summarize-selected-nodes',
             executor: 'graph-analysis',
             tool: 'summarizeNodes',
-            description: `Summarize ${graphNodeIds.length} graph-selected node${graphNodeIds.length === 1 ? '' : 's'}.`,
+            description: `Summarize ${graphAnalysisNodeIds.length} graph-selected or graph-referenced node${graphAnalysisNodeIds.length === 1 ? '' : 's'}.`,
             params: {
-              nodeIds: graphNodeIds,
+              nodeIds: graphAnalysisNodeIds,
             },
           }),
         ];
@@ -102,7 +113,11 @@ export class RetrievalPlanningAgentService {
       }
     }
 
-    if (queryRoute.category === 'GRAPH_QUERY' && intent.operation === 'graph-comparison' && graphNodeIds.length >= 2) {
+    if (
+      (queryRoute.category === 'GRAPH_QUERY' || queryRoute.category === 'MIXED_QUERY') &&
+      intent.operation === 'graph-comparison' &&
+      graphAnalysisNodeIds.length >= 2
+    ) {
       return [
         this.createStep({
           prefix: 'graph-comparison',
@@ -110,15 +125,19 @@ export class RetrievalPlanningAgentService {
           operation: 'compare-nodes',
           executor: 'graph-analysis',
           tool: 'compareNodes',
-          description: `Compare ${graphNodeIds.length} selected graph nodes.`,
+          description: `Compare ${graphAnalysisNodeIds.length} selected or graph-referenced nodes.`,
           params: {
-            nodeIds: graphNodeIds.slice(0, 6),
+            nodeIds: graphAnalysisNodeIds.slice(0, 6),
           },
         }),
       ];
     }
 
-    if (queryRoute.category === 'GRAPH_QUERY' && intent.operation === 'graph-commonality' && graphNodeIds.length >= 2) {
+    if (
+      (queryRoute.category === 'GRAPH_QUERY' || queryRoute.category === 'MIXED_QUERY') &&
+      intent.operation === 'graph-commonality' &&
+      graphAnalysisNodeIds.length >= 2
+    ) {
       const operation = this.pickCommonalityOperation(query, seedEntities, intent);
       return [
         this.createStep({
@@ -127,18 +146,22 @@ export class RetrievalPlanningAgentService {
           operation,
           executor: 'graph-analysis',
           tool: this.mapGraphAnalysisTool(operation),
-          description: `Find shared graph structure across ${graphNodeIds.length} selected anchors.`,
+          description: `Find shared graph structure across ${graphAnalysisNodeIds.length} selected or graph-referenced anchors.`,
           params: {
-            nodeIds: graphNodeIds.slice(0, 8),
+            nodeIds: graphAnalysisNodeIds.slice(0, 8),
             targetTypes: intent.requestedEntityTypes,
-            minSupport: this.pickMinimumSupport(graphNodeIds.length, 'shared'),
+            minSupport: this.pickMinimumSupport(graphAnalysisNodeIds.length, 'shared'),
             limit: 20,
           },
         }),
       ];
     }
 
-    if (queryRoute.category === 'GRAPH_QUERY' && intent.operation === 'graph-connections' && graphNodeIds.length >= 2) {
+    if (
+      (queryRoute.category === 'GRAPH_QUERY' || queryRoute.category === 'MIXED_QUERY') &&
+      intent.operation === 'graph-connections' &&
+      graphAnalysisNodeIds.length >= 2
+    ) {
       return [
         this.createStep({
           prefix: 'graph-connections',
@@ -146,9 +169,9 @@ export class RetrievalPlanningAgentService {
           operation: 'explain-connections',
           executor: 'graph-analysis',
           tool: 'explainConnections',
-          description: `Explain how ${graphNodeIds.length} selected graph nodes are connected.`,
+          description: `Explain how ${graphAnalysisNodeIds.length} selected or graph-referenced nodes are connected.`,
           params: {
-            nodeIds: graphNodeIds.slice(0, 6),
+            nodeIds: graphAnalysisNodeIds.slice(0, 6),
             maxDepth: 5,
           },
         }),

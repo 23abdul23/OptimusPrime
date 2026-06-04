@@ -88,6 +88,7 @@ const CACHE_TTL_STATS_SECONDS = 300;
 const CACHE_TTL_RANDOM_SECONDS = 60;
 const CACHE_TTL_SEARCH_SECONDS = 120;
 const CACHE_TTL_NODE_DETAILS_SECONDS = 300;
+const SHORTEST_PATH_QUERY_TIMEOUT_MS = 8000;
 
 function toNumber(value: unknown): number {
   if (neo4j.isInt(value)) {
@@ -837,6 +838,7 @@ export class OptimusKgService {
           relationshipTypes,
           nodeTypes,
         },
+        { timeout: SHORTEST_PATH_QUERY_TIMEOUT_MS },
       );
 
       const record = result.records[0];

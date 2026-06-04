@@ -6,9 +6,9 @@ import Redis from 'ioredis';
 import { OptimusKgModule } from '@/optimuskg/optimuskg.module';
 import { ThrottlerBehindProxyGuard } from '@/llm/llm-throttle.guard';
 import { ConversationGraphStateService } from './conversation-graph-state.service';
+import { EvidenceAgentService } from './evidence-agent.service';
 import { EntityExtractionService } from './entity-extraction.service';
 import { EntityResolutionAgentService } from './entity-resolution-agent.service';
-import { EvidenceSelectionService } from './evidence-selection.service';
 import { CypherAgentService } from './cypher-agent.service';
 import { GraphAnalysisService } from './graph-analysis.service';
 import { GraphContextAgentService } from './graph-context-agent.service';
@@ -17,7 +17,8 @@ import { GraphAgentService } from './graph-agent.service';
 import { GraphRetrieverService } from './graph-retriever.service';
 import { IntentAgentService } from './intent-agent.service';
 import { QueryRouterService } from './query-router.service';
-import { ResponseSynthesisService } from './response-synthesis.service';
+import { ReasoningAgentService } from './reasoning-agent.service';
+import { ReplanningAgentService } from './replanning-agent.service';
 import { RetrievalOperationsService } from './retrieval-operations.service';
 import { RetrievalPlanningAgentService } from './retrieval-planning-agent.service';
 
@@ -65,8 +66,9 @@ import { RetrievalPlanningAgentService } from './retrieval-planning-agent.servic
     CypherAgentService,
     GraphAnalysisService,
     GraphRetrieverService,
-    EvidenceSelectionService,
-    ResponseSynthesisService,
+    EvidenceAgentService,
+    ReplanningAgentService,
+    ReasoningAgentService,
     GraphAgentService,
   ],
 })

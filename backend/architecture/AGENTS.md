@@ -2,15 +2,21 @@
 
 ## Current Runtime Roles
 
-The current backend does not yet expose these as separate agents, but the responsibilities already cluster around these roles:
+The current backend now exposes these roles more explicitly:
 
 - Orchestrator: `GraphAgentService`
-- Extraction: `EntityExtractionService`
-- Resolution: `EntityResolutionService`
-- Planner: `RetrievalPlannerService`
-- Retriever: `GraphRetrieverService`
-- Evidence ranker: `EvidenceSelectionService`
-- Reasoner/synthesizer: `ResponseSynthesisService`
+- Query Router: `QueryRouterService`
+- Graph Context Agent: `GraphContextAgentService`
+- Intent Agent: `IntentAgentService`
+- Entity Mention Agent: `EntityExtractionService`
+- Entity Resolution Agent: `EntityResolutionAgentService`
+- Retrieval Planning Agent: `RetrievalPlanningAgentService`
+- Retrieval Operations Layer: `RetrievalOperationsService`
+- Cypher Agent: `CypherAgentService`
+- Graph Analysis Layer: `GraphAnalysisService`
+- Evidence Agent: `EvidenceAgentService`
+- Replanning Agent: `ReplanningAgentService`
+- Reasoning Agent: `ReasoningAgentService`
 
 ## Target Specialized Agents
 

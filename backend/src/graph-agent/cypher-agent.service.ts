@@ -3,6 +3,7 @@ import type { Record as Neo4jRecord } from 'neo4j-driver';
 import { Neo4jService } from '@/neo4j/neo4j.service';
 
 export type CypherRow = Record<string, unknown>;
+const CYPHER_QUERY_TIMEOUT_MS = 8000;
 
 const UNSAFE_CYPHER_PATTERNS = [
   /\bcreate\b/i,
@@ -70,7 +71,7 @@ export class CypherAgentService {
     const session = this.neo4jService.getSession();
 
     try {
-      const result = await session.run(limitedQuery, params);
+      const result = await session.run(limitedQuery, params, { timeout: CYPHER_QUERY_TIMEOUT_MS });
       return {
         rows: result.records.map((record) => this.recordToRow(record)),
         cost,
@@ -85,7 +86,7 @@ export class CypherAgentService {
     const session = this.neo4jService.getSession();
 
     try {
-      const result = await session.run(validated, params);
+      const result = await session.run(validated, params, { timeout: CYPHER_QUERY_TIMEOUT_MS });
       return result.records;
     } finally {
       await this.neo4jService.releaseSession(session);

@@ -20,66 +20,70 @@ export class GraphRetrieverService {
     const warnings: string[] = [];
 
     for (const step of plan) {
-      if (step.executor === 'graph-analysis') {
-        const result = await this.executeGraphAnalysis(step);
-        graphDelta = this.mergeGraphDelta(graphDelta, result.graph);
-        graphActions.push(...this.buildGraphActionsFromResult(step.id, result.graph, result.highlightNodeIds));
-        if (result.graph && result.graph.nodes.length > 1 && step.operation === 'explain-connections') {
-          graphActions.push({
-            id: `${step.id}-path`,
-            type: 'highlight-path',
-            nodeIds: result.graph.nodes.map((node) => node.key),
-            edgeIds: result.graph.edges.map((edge) => edge.key),
-          });
-        }
-        evidence.push(...result.items);
-        warnings.push(...(result.warnings ?? []));
-        continue;
-      }
-
-      if (step.executor === 'retrieval-operations') {
-        const result = await this.retrievalOperationsService.execute(step, resolvedEntities);
-        graphDelta = this.mergeGraphDelta(graphDelta, result.graph);
-        graphActions.push(...this.buildGraphActionsFromResult(step.id, result.graph, result.highlightNodeIds));
-        if (result.highlightPath) {
-          graphActions.push({
-            id: `${step.id}-path`,
-            type: 'highlight-path',
-            nodeIds: result.highlightPath.nodeIds,
-            edgeIds: result.highlightPath.edgeIds,
-          });
-        }
-        evidence.push(...result.items);
-        warnings.push(...(result.warnings ?? []));
-        continue;
-      }
-
-      if (step.executor === 'cypher-agent') {
-        const userQuery = String(step.params.userQuery ?? '');
-        const cypher = this.cypherAgentService.extractExplicitCypher(userQuery);
-        if (!cypher) {
-          warnings.push('No explicit Cypher query was provided in the request.');
+      try {
+        if (step.executor === 'graph-analysis') {
+          const result = await this.executeGraphAnalysis(step);
+          graphDelta = this.mergeGraphDelta(graphDelta, result.graph);
+          graphActions.push(...this.buildGraphActionsFromResult(step.id, result.graph, result.highlightNodeIds));
+          if (result.graph && result.graph.nodes.length > 1 && step.operation === 'explain-connections') {
+            graphActions.push({
+              id: `${step.id}-path`,
+              type: 'highlight-path',
+              nodeIds: result.graph.nodes.map((node) => node.key),
+              edgeIds: result.graph.edges.map((edge) => edge.key),
+            });
+          }
+          evidence.push(...result.items);
+          warnings.push(...(result.warnings ?? []));
           continue;
         }
 
-        const result = await this.cypherAgentService.executeGuardedCypher(cypher, {}, 25);
-        evidence.push({
-          id: step.id,
-          kind: 'query',
-          title: 'Guarded Cypher result',
-          summary: `Returned ${result.rows.length} row(s) from the validated Cypher query.`,
-          score: 0.6,
-          nodeIds: [],
-          edgeIds: [],
-          metadata: {
-            rows: result.rows,
-            cost: result.cost,
-          },
-        });
-        continue;
-      }
+        if (step.executor === 'retrieval-operations') {
+          const result = await this.retrievalOperationsService.execute(step, resolvedEntities);
+          graphDelta = this.mergeGraphDelta(graphDelta, result.graph);
+          graphActions.push(...this.buildGraphActionsFromResult(step.id, result.graph, result.highlightNodeIds));
+          if (result.highlightPath) {
+            graphActions.push({
+              id: `${step.id}-path`,
+              type: 'highlight-path',
+              nodeIds: result.highlightPath.nodeIds,
+              edgeIds: result.highlightPath.edgeIds,
+            });
+          }
+          evidence.push(...result.items);
+          warnings.push(...(result.warnings ?? []));
+          continue;
+        }
 
-      warnings.push(`Graph retrieval executor "${step.executor}" is not implemented.`);
+        if (step.executor === 'cypher-agent') {
+          const userQuery = String(step.params.userQuery ?? '');
+          const cypher = this.cypherAgentService.extractExplicitCypher(userQuery);
+          if (!cypher) {
+            warnings.push('No explicit Cypher query was provided in the request.');
+            continue;
+          }
+
+          const result = await this.cypherAgentService.executeGuardedCypher(cypher, {}, 25);
+          evidence.push({
+            id: step.id,
+            kind: 'query',
+            title: 'Guarded Cypher result',
+            summary: `Returned ${result.rows.length} row(s) from the validated Cypher query.`,
+            score: 0.6,
+            nodeIds: [],
+            edgeIds: [],
+            metadata: {
+              rows: result.rows,
+              cost: result.cost,
+            },
+          });
+          continue;
+        }
+
+        warnings.push(`Graph retrieval executor "${step.executor}" is not implemented.`);
+      } catch (error) {
+        warnings.push(this.formatStepError(step, error));
+      }
     }
 
     return {
@@ -187,5 +191,14 @@ export class GraphRetrieverService {
     }
 
     return nextGraph;
+  }
+
+  private formatStepError(step: RetrievalPlanStep, error: unknown) {
+    const message =
+      error instanceof Error && error.message.trim().length > 0
+        ? error.message.trim()
+        : 'Unknown graph retrieval failure.';
+
+    return `Step "${step.operation}" failed: ${message}`;
   }
 }

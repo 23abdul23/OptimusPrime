@@ -133,26 +133,33 @@ export class EntityResolutionAgentService {
       .replace(/^(?:various|the|relationship of|study of|relationship between)\s+/i, '')
       .replace(/^(?:genes?|proteins?|drugs?|pathways?)\s+(?:associated|related|linked)\s+with\s+/i, '')
       .replace(/^(?:genes?|proteins?|drugs?|pathways?)\s+/i, '');
+    const withoutTrailingEntityClass = withoutGenericLead.replace(
+      /\s+(?:gene|protein|drug|pathway|disease|syndrome|disorder|phenotype|guideline)s?\b/gi,
+      '',
+    );
+    const normalizedCore = withoutTrailingEntityClass.trim().length > 0 ? withoutTrailingEntityClass : withoutGenericLead;
 
     variants.add(normalizedWhitespace);
     variants.add(withoutGenericLead);
-    variants.add(this.toTitleCase(withoutGenericLead));
-    variants.add(withoutGenericLead.replace(/-/g, ' '));
-    variants.add(withoutGenericLead.replace(/\s+/g, '-'));
-    variants.add(withoutGenericLead.replace(/'s\b/gi, ''));
-    variants.add(this.expandGreekVariants(withoutGenericLead));
-    variants.add(this.expandGreekVariants(withoutGenericLead.replace(/-/g, ' ')));
+    variants.add(normalizedCore);
+    variants.add(this.toTitleCase(normalizedCore));
+    variants.add(normalizedCore.replace(/-/g, ' '));
+    variants.add(normalizedCore.replace(/\s+/g, '-'));
+    variants.add(normalizedCore.replace(/'s\b/gi, ''));
+    variants.add(this.expandGreekVariants(normalizedCore));
+    variants.add(this.expandGreekVariants(normalizedCore.replace(/-/g, ' ')));
+    variants.add(this.expandAmyloidVariants(normalizedCore));
 
-    const diseaseMatch = withoutGenericLead.match(/([A-Za-z0-9-]+(?:\s+[A-Za-z0-9-]+){0,2}\s+disease)$/i);
+    const diseaseMatch = normalizedCore.match(/([A-Za-z0-9-]+(?:\s+[A-Za-z0-9-]+){0,2}\s+disease)$/i);
     if (diseaseMatch) {
       variants.add(diseaseMatch[1]);
       variants.add(this.toTitleCase(diseaseMatch[1]));
     }
 
-    if (typeHints.some((hint) => hint.toLowerCase() === 'disease') && !/\bdisease\b/i.test(withoutGenericLead)) {
-      variants.add(`${withoutGenericLead} disease`);
-      variants.add(this.toTitleCase(`${withoutGenericLead} disease`));
-      variants.add(`${withoutGenericLead.replace(/'s\b/gi, '')} disease`);
+    if (typeHints.some((hint) => hint.toLowerCase() === 'disease') && !/\bdisease\b/i.test(normalizedCore)) {
+      variants.add(`${normalizedCore} disease`);
+      variants.add(this.toTitleCase(`${normalizedCore} disease`));
+      variants.add(`${normalizedCore.replace(/'s\b/gi, '')} disease`);
     }
 
     return [...variants].map((variant) => variant.trim()).filter((variant) => variant.length >= 2);
@@ -272,6 +279,17 @@ export class EntityResolutionAgentService {
     }
 
     return 90;
+  }
+
+  private expandAmyloidVariants(value: string) {
+    if (!/\bamyloid beta\b/i.test(value)) {
+      return value;
+    }
+
+    return value
+      .replace(/\bamyloid beta\b/gi, 'amyloid-beta')
+      .replace(/\bamyloid-beta\b/gi, 'amyloid β')
+      .replace(/\bamyloid β\b/gi, 'beta amyloid');
   }
 
   private expandGreekVariants(value: string) {

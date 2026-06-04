@@ -5,6 +5,8 @@ import { OptimusKgService, type SerializedGraphPayload } from '@/optimuskg/optim
 import type { GraphEvidenceItem } from './graph-agent.types';
 import { compactRecord, parseStringArray, serializeGraphFromRecords, toNumber } from './graph-agent.utils';
 
+const GRAPH_ANALYSIS_QUERY_TIMEOUT_MS = 8000;
+
 interface GraphAnalysisResult {
   items: GraphEvidenceItem[];
   graph?: SerializedGraphPayload;
@@ -80,7 +82,11 @@ export class GraphAnalysisService {
   async summarizeSubgraph(nodeIds: string[], edgeIds: string[]): Promise<GraphAnalysisResult> {
     const dedupedNodeIds = this.dedupeIds(nodeIds).slice(0, 120);
     const dedupedEdgeIds = this.dedupeIds(edgeIds).slice(0, 240);
-    const { nodes, relationships } = await this.loadNodeSetSubgraph(dedupedNodeIds, dedupedEdgeIds, 240);
+    const { nodes, relationships } = await this.loadNodeSetSubgraph(
+      dedupedNodeIds,
+      dedupedNodeIds.length > 0 ? [] : dedupedEdgeIds,
+      240,
+    );
 
     if (nodes.length === 0 && relationships.length === 0) {
       return { items: [], warnings: ['No visible subgraph data was available to summarize.'] };
@@ -327,6 +333,7 @@ export class GraphAnalysisService {
           minSupport: neo4j.int(Math.max(1, minSupport)),
           limit: neo4j.int(Math.max(1, limit)),
         },
+        { timeout: GRAPH_ANALYSIS_QUERY_TIMEOUT_MS },
       );
 
       const nodes: Neo4jNode[] = [];
@@ -400,39 +407,52 @@ export class GraphAnalysisService {
               nodeIds: dedupedNodeIds,
               limit: neo4j.int(Math.max(1, limit)),
             },
+            { timeout: GRAPH_ANALYSIS_QUERY_TIMEOUT_MS },
           )
         : { records: [] as Array<{ get(key: string): Neo4jNode }> };
 
-      const relationshipResult =
-        dedupedNodeIds.length || dedupedEdgeIds.length
-          ? await session.run(
-              `
-                MATCH (source:Entity)-[rel]-(target:Entity)
-                WHERE (
-                  size($nodeIds) > 0
-                  AND source.id IN $nodeIds
-                  AND target.id IN $nodeIds
-                )
-                OR (
-                  size($edgeIds) > 0
-                  AND coalesce(rel.edgeKey, '') IN $edgeIds
-                )
-                RETURN source, rel, target
-                LIMIT $limit
-              `,
-              {
-                nodeIds: dedupedNodeIds,
-                edgeIds: dedupedEdgeIds,
-                limit: neo4j.int(Math.max(1, limit)),
-              },
-            )
-          : { records: [] as Array<{ get(key: string): Neo4jNode | Neo4jRelationship }> };
+      const relationshipRecords: Array<{ get(key: string): Neo4jNode | Neo4jRelationship }> = [];
+
+      if (dedupedNodeIds.length > 0) {
+        const nodeScopedRelationships = await session.run(
+          `
+            MATCH (source:Entity)-[rel]-(target:Entity)
+            WHERE source.id IN $nodeIds
+              AND target.id IN $nodeIds
+            RETURN source, rel, target
+            LIMIT $limit
+          `,
+          {
+            nodeIds: dedupedNodeIds,
+            limit: neo4j.int(Math.max(1, limit)),
+          },
+          { timeout: GRAPH_ANALYSIS_QUERY_TIMEOUT_MS },
+        );
+        relationshipRecords.push(...nodeScopedRelationships.records);
+      }
+
+      if (dedupedEdgeIds.length > 0) {
+        const edgeScopedRelationships = await session.run(
+          `
+            MATCH (source:Entity)-[rel]-(target:Entity)
+            WHERE coalesce(rel.edgeKey, '') IN $edgeIds
+            RETURN source, rel, target
+            LIMIT $limit
+          `,
+          {
+            edgeIds: dedupedEdgeIds,
+            limit: neo4j.int(Math.max(1, limit)),
+          },
+          { timeout: GRAPH_ANALYSIS_QUERY_TIMEOUT_MS },
+        );
+        relationshipRecords.push(...edgeScopedRelationships.records);
+      }
 
       const nodes = nodeResult.records.map((record) => record.get('node') as Neo4jNode);
       const relationshipNodes: Neo4jNode[] = [];
       const relationships: Neo4jRelationship[] = [];
 
-      for (const record of relationshipResult.records) {
+      for (const record of relationshipRecords) {
         relationshipNodes.push(record.get('source') as Neo4jNode, record.get('target') as Neo4jNode);
         relationships.push(record.get('rel') as Neo4jRelationship);
       }

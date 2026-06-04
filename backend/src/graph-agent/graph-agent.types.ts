@@ -241,6 +241,18 @@ export interface GraphEvidenceItem {
   metadata?: Record<string, unknown>;
 }
 
+export interface GraphEvidenceAssessment {
+  confidence: number;
+  confidenceLabel: 'low' | 'medium' | 'high';
+  isInsufficient: boolean;
+  needsReplan: boolean;
+  rationale: string;
+  analyticalCoverage: number;
+  provenanceCoverage: number;
+  matchedOperations: RetrievalOperation[];
+  replanAttempts: number;
+}
+
 export interface GraphEvidenceBundle {
   query: string;
   resolvedEntities: ResolvedEntity[];
@@ -248,6 +260,10 @@ export interface GraphEvidenceBundle {
   items: GraphEvidenceItem[];
   insufficientEvidence: boolean;
   warnings: string[];
+  confidence: number;
+  confidenceLabel: GraphEvidenceAssessment['confidenceLabel'];
+  provenanceHighlights: string[];
+  assessment: GraphEvidenceAssessment;
 }
 
 export interface ConversationGraphState {

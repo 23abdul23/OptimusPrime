@@ -4,12 +4,13 @@ import { DEFAULT_MODEL, type ModelId } from '@/llm/model.constants';
 import { ConversationGraphStateService } from './conversation-graph-state.service';
 import { EntityExtractionService } from './entity-extraction.service';
 import { EntityResolutionAgentService } from './entity-resolution-agent.service';
-import { EvidenceSelectionService } from './evidence-selection.service';
+import { EvidenceAgentService } from './evidence-agent.service';
 import { GraphContextAgentService } from './graph-context-agent.service';
 import { GraphRetrieverService } from './graph-retriever.service';
 import type { GraphAgentChatRequestDto } from './graph-agent.dto';
 import type {
   ConversationGraphState,
+  GraphAction,
   GraphAgentUIMessage,
   GraphEvidenceItem,
   GraphNetworkContext,
@@ -19,10 +20,13 @@ import type {
 } from './graph-agent.types';
 import { extractLatestUserText } from './graph-agent.utils';
 import { IntentAgentService } from './intent-agent.service';
-import { ResponseSynthesisService } from './response-synthesis.service';
+import { ReasoningAgentService } from './reasoning-agent.service';
 import { RetrievalPlanningAgentService } from './retrieval-planning-agent.service';
 import type { GraphEvidenceBundle, RetrievalPlanStep } from './graph-agent.types';
 import { QueryRouterService } from './query-router.service';
+import { ReplanningAgentService } from './replanning-agent.service';
+
+const MAX_REPLAN_ATTEMPTS = 2;
 
 @Injectable()
 export class GraphAgentService {
@@ -35,8 +39,9 @@ export class GraphAgentService {
     private readonly queryRouterService: QueryRouterService,
     private readonly retrievalPlanningAgentService: RetrievalPlanningAgentService,
     private readonly graphRetrieverService: GraphRetrieverService,
-    private readonly evidenceSelectionService: EvidenceSelectionService,
-    private readonly responseSynthesisService: ResponseSynthesisService,
+    private readonly evidenceAgentService: EvidenceAgentService,
+    private readonly replanningAgentService: ReplanningAgentService,
+    private readonly reasoningAgentService: ReasoningAgentService,
   ) {}
 
   createChatStream(promptDto: GraphAgentChatRequestDto) {
@@ -82,7 +87,44 @@ export class GraphAgentService {
         );
 
         if (intent.operation === 'network-summary' && promptDto.networkContext) {
-          const evidenceBundle = this.buildNetworkSummaryBundle(query, promptDto.networkContext);
+          const evidenceBundle = this.evidenceAgentService.buildBundle({
+            query,
+            items: [
+              {
+                id: `network-summary-item-${Date.now()}`,
+                kind: 'query',
+                title: 'Visible network summary',
+                summary: `The current visible network has ${promptDto.networkContext.totalNodes} nodes and ${promptDto.networkContext.totalEdges} edges.`,
+                score: 1,
+                nodeIds: promptDto.networkContext.selectedNodeIds ?? [],
+                edgeIds: [],
+                metadata: {
+                  totalNodes: promptDto.networkContext.totalNodes,
+                  totalEdges: promptDto.networkContext.totalEdges,
+                  topNodeTypes: promptDto.networkContext.topNodeTypes ?? [],
+                },
+              },
+            ],
+            resolvedEntities: [],
+            plan: [
+              {
+                id: `network-summary-${Date.now()}`,
+                intent: 'network-summary',
+                operation: 'network-summary',
+                executor: 'state',
+                tool: 'getConversationGraphState',
+                description: 'Summarize the currently visible frontend network.',
+                params: {
+                  totalNodes: promptDto.networkContext.totalNodes,
+                  totalEdges: promptDto.networkContext.totalEdges,
+                },
+              },
+            ],
+            warnings: [],
+            selectedNodeIds: promptDto.networkContext.selectedNodeIds ?? [],
+            visibleNodeIds: promptDto.networkContext.visibleNodeIds ?? previousState.visibleNodeIds,
+            replanAttempts: 0,
+          });
           const nextState = await this.conversationStateService.saveConversationGraphState({
             ...previousState,
             sessionId,
@@ -135,7 +177,7 @@ export class GraphAgentService {
           queryRoute.category !== 'GRAPH_QUERY' &&
           this.shouldBlockOnUnresolvedMentions(extractedQuery.mentions.length, intent.operation, unresolvedMentions)
         ) {
-          const evidenceBundle = this.evidenceSelectionService.buildBundle({
+          const evidenceBundle = this.evidenceAgentService.buildBundle({
             query,
             items: selectedEdgeEvidence,
             resolvedEntities,
@@ -157,6 +199,7 @@ export class GraphAgentService {
             ],
             selectedNodeIds: (promptDto.selectedNodeContext ?? []).map((node) => node.id),
             visibleNodeIds: promptDto.networkContext?.visibleNodeIds ?? previousState.visibleNodeIds,
+            replanAttempts: 0,
           });
 
           const nextState = await this.conversationStateService.saveConversationGraphState(
@@ -196,7 +239,7 @@ export class GraphAgentService {
           return;
         }
 
-        const plan = this.retrievalPlanningAgentService.plan({
+        let accumulatedPlan = this.retrievalPlanningAgentService.plan({
           query,
           queryRoute,
           graphContext,
@@ -205,16 +248,53 @@ export class GraphAgentService {
           resolvedEntities,
           state: previousState,
         });
-        const retrieval = await this.graphRetrieverService.executePlan(plan, resolvedEntities);
-        const evidenceBundle = this.evidenceSelectionService.buildBundle({
-          query,
-          items: [...selectedEdgeEvidence, ...retrieval.evidence],
-          resolvedEntities,
-          plan,
-          warnings: retrieval.warnings,
-          selectedNodeIds: (promptDto.selectedNodeContext ?? []).map((node) => node.id),
-          visibleNodeIds: promptDto.networkContext?.visibleNodeIds ?? previousState.visibleNodeIds,
-        });
+        const accumulatedEvidence: GraphEvidenceItem[] = [...selectedEdgeEvidence];
+        const accumulatedWarnings: string[] = [];
+        const accumulatedGraphActions: GraphAction[] = [];
+        let evidenceBundle!: GraphEvidenceBundle;
+        let currentPlanBatch = accumulatedPlan;
+        let replanAttempts = 0;
+
+        while (currentPlanBatch.length > 0) {
+          const retrieval = await this.graphRetrieverService.executePlan(currentPlanBatch, resolvedEntities);
+          accumulatedEvidence.push(...retrieval.evidence);
+          accumulatedWarnings.push(...retrieval.warnings);
+          accumulatedGraphActions.push(...retrieval.graphActions);
+
+          evidenceBundle = this.evidenceAgentService.buildBundle({
+            query,
+            items: accumulatedEvidence,
+            resolvedEntities,
+            plan: accumulatedPlan,
+            warnings: Array.from(new Set(accumulatedWarnings)),
+            selectedNodeIds: (promptDto.selectedNodeContext ?? []).map((node) => node.id),
+            visibleNodeIds: promptDto.networkContext?.visibleNodeIds ?? previousState.visibleNodeIds,
+            replanAttempts,
+          });
+
+          if (!evidenceBundle.assessment.needsReplan || replanAttempts >= MAX_REPLAN_ATTEMPTS) {
+            break;
+          }
+
+          const replan = this.replanningAgentService.replan({
+            query,
+            intent,
+            graphContext,
+            extractedQuery,
+            resolvedEntities,
+            state: previousState,
+            plan: accumulatedPlan,
+            evidence: evidenceBundle,
+          });
+
+          if (replan.length === 0) {
+            break;
+          }
+
+          replanAttempts += 1;
+          accumulatedPlan = [...accumulatedPlan, ...replan];
+          currentPlanBatch = replan;
+        }
 
         const nextState = await this.conversationStateService.saveConversationGraphState(
           this.buildNextState({
@@ -236,7 +316,7 @@ export class GraphAgentService {
         writer.write({
           type: 'data-graphActions',
           id: `graph-actions-${responseId}`,
-          data: retrieval.graphActions,
+          data: this.deduplicateGraphActions(accumulatedGraphActions),
         });
         writer.write({
           type: 'data-graphState',
@@ -247,21 +327,23 @@ export class GraphAgentService {
           },
         });
 
-        const synthesisStream = this.responseSynthesisService.streamAnswer({
+        const synthesisStream = this.reasoningAgentService.streamAnswer({
           model: (promptDto.model as ModelId | undefined) ?? DEFAULT_MODEL,
           query,
           evidence: evidenceBundle,
           resolvedEntities,
+          graphContext,
+          graphActions: this.deduplicateGraphActions(accumulatedGraphActions),
         });
 
         if (!synthesisStream) {
-          this.writeText(writer, this.responseSynthesisService.createFallbackAnswer(query, evidenceBundle));
+          this.writeText(writer, this.reasoningAgentService.createFallbackAnswer(query, evidenceBundle));
           return;
         }
 
         writer.merge(
           synthesisStream.toUIMessageStream<GraphAgentUIMessage>({
-            onError: () => this.responseSynthesisService.createFallbackAnswer(query, evidenceBundle),
+            onError: () => this.reasoningAgentService.createFallbackAnswer(query, evidenceBundle),
           }),
         );
       },
@@ -275,7 +357,7 @@ export class GraphAgentService {
     previousState: ConversationGraphState;
     sessionId: string;
     resolvedEntities: ConversationGraphState['activeEntities'];
-    evidenceBundle: ReturnType<EvidenceSelectionService['buildBundle']>;
+    evidenceBundle: ReturnType<EvidenceAgentService['buildBundle']>;
     selectedNodeIds: string[];
     selectedEdgeIds: string[];
     networkContext?: GraphNetworkContext;
@@ -333,50 +415,6 @@ export class GraphAgentService {
     writer.write({ type: 'text-start', id });
     writer.write({ type: 'text-delta', id, delta: text });
     writer.write({ type: 'text-end', id });
-  }
-
-  private buildNetworkSummaryBundle(
-    query: string,
-    networkContext: GraphNetworkContext,
-  ): GraphEvidenceBundle {
-    const plan: RetrievalPlanStep[] = [
-      {
-        id: `network-summary-${Date.now()}`,
-        intent: 'network-summary',
-        operation: 'network-summary',
-        executor: 'state',
-        tool: 'getConversationGraphState',
-        description: 'Summarize the currently visible frontend network.',
-        params: {
-          totalNodes: networkContext.totalNodes,
-          totalEdges: networkContext.totalEdges,
-        },
-      },
-    ];
-
-    return {
-      query,
-      resolvedEntities: [],
-      plan,
-      items: [
-        {
-          id: `network-summary-item-${Date.now()}`,
-          kind: 'query',
-          title: 'Visible network summary',
-          summary: `The current visible network has ${networkContext.totalNodes} nodes and ${networkContext.totalEdges} edges.`,
-          score: 1,
-          nodeIds: networkContext.selectedNodeIds ?? [],
-          edgeIds: [],
-          metadata: {
-            totalNodes: networkContext.totalNodes,
-            totalEdges: networkContext.totalEdges,
-            topNodeTypes: networkContext.topNodeTypes ?? [],
-          },
-        },
-      ],
-      insufficientEvidence: false,
-      warnings: [],
-    };
   }
 
   private getUnresolvedMentionTexts(
@@ -506,6 +544,17 @@ export class GraphAgentService {
           selectedContext: true,
         },
       };
+    });
+  }
+
+  private deduplicateGraphActions(actions: GraphAction[]) {
+    const seen = new Set<string>();
+    return actions.filter((action) => {
+      if (seen.has(action.id)) {
+        return false;
+      }
+      seen.add(action.id);
+      return true;
     });
   }
 }

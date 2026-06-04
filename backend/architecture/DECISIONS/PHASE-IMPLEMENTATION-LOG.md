@@ -190,7 +190,119 @@ Changed files:
 - `backend/src/graph-agent/graph-agent.module.ts`
 - `backend/architecture/DECISIONS/ADR-009-cypher-agent.md`
 
+## Phase 9: Evidence Agent
+
+Completed:
+
+- introduced `EvidenceAgentService`
+- replaced evidence ranking with an explicit evidence assessment boundary
+- added bundle-level confidence, provenance highlights, and replan signaling
+- extended the graph-evidence payload with structured assessment metadata
+
+Changed files:
+
+- `backend/src/graph-agent/evidence-agent.service.ts`
+- `backend/src/graph-agent/graph-agent.types.ts`
+- `backend/src/graph-agent/graph-agent.service.ts`
+- `frontend/lib/graph-agent-types.ts`
+- `backend/architecture/DECISIONS/ADR-010-evidence-agent.md`
+
+## Phase 10: Replanning Loop
+
+Completed:
+
+- introduced `ReplanningAgentService`
+- added a bounded retrieval replan loop to `GraphAgentService`
+- enabled the backend to evaluate “enough evidence?” before final answer generation
+- added follow-up retrieval escalation for weak relationship and path-based evidence
+
+Changed files:
+
+- `backend/src/graph-agent/replanning-agent.service.ts`
+- `backend/src/graph-agent/graph-agent.service.ts`
+- `backend/src/graph-agent/graph-agent.module.ts`
+- `backend/architecture/DECISIONS/ADR-011-replanning-loop.md`
+
+## Phase 11: Reasoning Agent
+
+Completed:
+
+- introduced `ReasoningAgentService`
+- moved final grounded answer generation onto an explicit reasoning boundary
+- passed evidence assessment, provenance highlights, graph context, and graph actions into the final reasoning step
+- replaced the old synthesis-only orchestration path with reasoning-agent usage
+
+Changed files:
+
+- `backend/src/graph-agent/reasoning-agent.service.ts`
+- `backend/src/graph-agent/graph-agent.service.ts`
+- `backend/src/graph-agent/graph-agent.module.ts`
+- `backend/architecture/DECISIONS/ADR-012-reasoning-agent.md`
+
+## Post-Phase 11 Hardening And Verification
+
+Completed:
+
+- added a local integration smoke harness at `backend/scripts/graph_agent_phase11_smoke.ts`
+- added bounded execution timeouts for:
+  - guarded Cypher execution
+  - retrieval-operation Cypher templates
+  - shortest-path queries
+  - graph-analysis Neo4j queries
+- made `GraphRetrieverService` fail open at the step level so a slow or failed retrieval step becomes a warning instead of crashing the whole turn
+- tightened query routing and extraction for graph-referential phrases such as:
+  - `these genes`
+  - `these proteins`
+  - `these pathways`
+  - `these drugs`
+- tightened mention extraction so imperative graph verbs like `Summarize` are not treated as biomedical mentions
+- expanded deterministic resolution variants for entity-class suffixes and amyloid-beta spelling variants
+- extended mixed graph+entity planning so graph-connection queries can route into graph-analysis instead of falling back incorrectly
+- simplified visible-subgraph graph-analysis loading to avoid unnecessary edge-key scans during subgraph explanation
+
+Changed files:
+
+- `backend/scripts/graph_agent_phase11_smoke.ts`
+- `backend/src/graph-agent/cypher-agent.service.ts`
+- `backend/src/graph-agent/graph-analysis.service.ts`
+- `backend/src/graph-agent/graph-retriever.service.ts`
+- `backend/src/graph-agent/entity-extraction.service.ts`
+- `backend/src/graph-agent/entity-resolution-agent.service.ts`
+- `backend/src/graph-agent/query-router.service.ts`
+- `backend/src/graph-agent/retrieval-planning-agent.service.ts`
+- `backend/src/optimuskg/optimuskg.service.ts`
+
 ## Verification
 
-- frontend typecheck was not required for these backend-only phases
-- backend verification for Phases 3-8 should still be interpreted relative to the pre-existing unrelated missing `clickhouse` modules
+- executed the local smoke harness with local Neo4j and Redis and `OPENAI_API_KEY` cleared so reasoning stayed on the fallback grounded path
+- `phaseCrossCheck` passed for all implemented architecture components:
+  - query router
+  - graph context agent
+  - intent agent
+  - entity mention agent
+  - entity resolution agent
+  - retrieval planning agent
+  - retrieval operations layer
+  - cypher agent
+  - graph analysis layer
+  - evidence agent
+  - replanning loop
+  - reasoning agent
+- Plan.md DoD flow verification succeeded for:
+  - `Summarize these nodes`
+  - `What do these genes have in common?`
+  - `How do these selected genes relate to Parkinson disease?`
+  - `For which diseases is Metformin indicated?`
+  - `How is APOE related to amyloid beta?` via explicit unresolved-mention blocking
+  - `Find pathways shared by the selected nodes.`
+  - `Explain this subgraph.`
+- remaining observed validation gaps from the local DoD flow:
+  - the smoke harness could not prepare a two-protein selected context from the current OptimusKG resolution/search path, so:
+    - `Compare the selected proteins`
+    - `Which approved drugs target these proteins?`
+    were not validated against real protein selections
+  - `amyloid beta` still does not resolve confidently from current OptimusKG metadata in the local verification flow
+- frontend typecheck was not required for these backend-focused phases
+- backend verification for Phases 3-11 remains relative to the pre-existing unrelated missing `clickhouse` / dataloader modules:
+  - `src/dataloader/dataloader.service.ts`
+  - `src/dataloader/index.ts`

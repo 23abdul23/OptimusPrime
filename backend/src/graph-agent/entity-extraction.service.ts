@@ -333,6 +333,15 @@ export class EntityExtractionService {
         continue;
       }
 
+      const trailingPhrase = query.slice(match.index);
+      if (
+        /^[A-Z][A-Za-z0-9'-]{2,}(?:\s+[A-Za-z0-9'-]+){0,4}\s+(?:disease|syndrome|disorder|dementia|cancer|phenotype|guideline|pathway)\b/i.test(
+          trailingPhrase,
+        )
+      ) {
+        continue;
+      }
+
       if (CAPTURED_PHRASE_STOPWORDS.has(text.toLowerCase())) {
         continue;
       }
@@ -451,7 +460,7 @@ export class EntityExtractionService {
   }
 
   private shouldDiscardMention(value: string) {
-    return /^(?:what|how|which|does|do|show|give|expand|compare|find|tell|load|retrieve|approved|genes?|proteins?|pathways?|drugs?|for|is|are|them|those|selected|highlighted|current|indicated|participat(?:e|es)|target(?:s)?|related|linked|connected|associated|involved)\b/i.test(
+    return /^(?:what|how|which|does|do|show|give|expand|compare|find|tell|load|retrieve|summariz(?:e|ing)|describe|explain|analy[sz]e|approved|genes?|proteins?|pathways?|drugs?|for|is|are|them|those|selected|highlighted|current|indicated|participat(?:e|es)|target(?:s)?|related|linked|connected|associated|involved)\b/i.test(
       value,
     );
   }
