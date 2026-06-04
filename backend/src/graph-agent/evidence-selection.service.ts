@@ -9,12 +9,16 @@ export class EvidenceSelectionService {
     resolvedEntities: ResolvedEntity[];
     plan: RetrievalPlanStep[];
     warnings: string[];
+    selectedNodeIds?: string[];
+    visibleNodeIds?: string[];
   }): GraphEvidenceBundle {
     const resolvedNodeIds = new Set(params.resolvedEntities.map((entity) => entity.id));
+    const selectedNodeIds = new Set(params.selectedNodeIds ?? []);
+    const visibleNodeIds = new Set(params.visibleNodeIds ?? []);
     const rankedItems = [...params.items]
       .map((item) => ({
         item,
-        rank: this.rankItem(item, resolvedNodeIds),
+        rank: this.rankItem(item, resolvedNodeIds, selectedNodeIds, visibleNodeIds),
       }))
       .sort((a, b) => b.rank - a.rank || b.item.score - a.item.score || a.item.title.localeCompare(b.item.title))
       .map(({ item }) => item)
@@ -36,11 +40,27 @@ export class EvidenceSelectionService {
     };
   }
 
-  private rankItem(item: GraphEvidenceItem, resolvedNodeIds: Set<string>) {
+  private rankItem(
+    item: GraphEvidenceItem,
+    resolvedNodeIds: Set<string>,
+    selectedNodeIds: Set<string>,
+    visibleNodeIds: Set<string>,
+  ) {
     const directResolvedCoverage =
       item.nodeIds.length > 0 ? item.nodeIds.filter((nodeId) => resolvedNodeIds.has(nodeId)).length : 0;
+    const selectedCoverage =
+      item.nodeIds.length > 0 ? item.nodeIds.filter((nodeId) => selectedNodeIds.has(nodeId)).length : 0;
+    const visibleCoverage =
+      item.nodeIds.length > 0 ? item.nodeIds.filter((nodeId) => visibleNodeIds.has(nodeId)).length : 0;
     const provenanceCount = this.extractArrayCount(item.metadata, ['provenance', 'sourceDirect', 'sourceIndirect', 'sourceNames']);
     const metadataRichness = item.metadata ? Object.keys(item.metadata).length : 0;
+    const support = this.extractNumericValue(item.metadata, ['support']);
+    const confidence = this.extractNumericValue(item.metadata, ['confidence']);
+    const descriptionBoost =
+      item.metadata &&
+      (typeof item.metadata.neighborDescription === 'string' || typeof item.metadata.description === 'string')
+        ? 0.03
+        : 0;
     const pathPenalty = item.kind === 'path' ? Math.max(0, item.nodeIds.length - 3) * 0.03 : 0;
     const kindBoost =
       item.kind === 'relation'
@@ -57,8 +77,13 @@ export class EvidenceSelectionService {
       item.score +
       kindBoost +
       directResolvedCoverage * 0.08 +
+      selectedCoverage * 0.1 +
+      Math.min(0.08, visibleCoverage * 0.015) +
+      Math.min(0.1, support * 0.03) +
+      Math.min(0.08, confidence * 0.04) +
       Math.min(0.12, provenanceCount * 0.02) +
-      Math.min(0.08, metadataRichness * 0.01) -
+      Math.min(0.08, metadataRichness * 0.01) +
+      descriptionBoost -
       pathPenalty
     );
   }
@@ -72,5 +97,20 @@ export class EvidenceSelectionService {
       const value = metadata[key];
       return count + (Array.isArray(value) ? value.length : 0);
     }, 0);
+  }
+
+  private extractNumericValue(metadata: Record<string, unknown> | undefined, keys: string[]) {
+    if (!metadata) {
+      return 0;
+    }
+
+    for (const key of keys) {
+      const value = metadata[key];
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        return value;
+      }
+    }
+
+    return 0;
   }
 }

@@ -14,13 +14,15 @@ export class RetrievalPlannerService {
     extractedQuery: ExtractedQuery;
     resolvedEntities: ResolvedEntity[];
     state: ConversationGraphState;
-    selectedNodeContext: Array<{ id: string; label: string }>;
+    selectedNodeContext: Array<{ id: string; label: string; nodeType?: string }>;
   }): RetrievalPlanStep[] {
     const { query, extractedQuery, resolvedEntities, state, selectedNodeContext } = params;
     const normalized = query.toLowerCase();
 
     const explicitEntities = resolvedEntities.filter((entity) => entity.source !== 'concept');
     const conceptResolvedEntities = resolvedEntities.filter((entity) => entity.source === 'concept');
+    const seedEntities = this.pickSeedEntities(explicitEntities, extractedQuery);
+    const aggregateMode = this.pickAggregateMode(query, extractedQuery);
     const contextAnchors = this.pickContextAnchors({
       query,
       extractedQuery,
@@ -102,6 +104,32 @@ export class RetrievalPlannerService {
       ];
     }
 
+    if (primary && extractedQuery.intent.operation === 'drug-indications') {
+      return [
+        {
+          id: createStepId('entity-details'),
+          intent: 'drug-search',
+          tool: 'getNodeDetails',
+          description: `Load metadata for ${primary.displayName}.`,
+          params: {
+            nodeIds: [primary.id],
+          },
+        },
+        {
+          id: createStepId('drug-indications'),
+          intent: 'drug-search',
+          tool: 'getRelatedEntities',
+          description: `Retrieve diseases indicated for ${primary.displayName}.`,
+          params: {
+            nodeId: primary.id,
+            nodeTypes: ['Disease'],
+            relationshipTypes: this.pickRelationshipTypes(query, extractedQuery),
+            limit: 20,
+          },
+        },
+      ];
+    }
+
     if (primary && extractedQuery.intent.operation === 'guideline-search') {
       return [
         {
@@ -126,7 +154,73 @@ export class RetrievalPlannerService {
       ];
     }
 
+    if (
+      extractedQuery.intent.operation === 'pathway-search' &&
+      seedEntities.length > 1 &&
+      seedEntities.every((entity) => /(gene|protein)/i.test(entity.typeName))
+    ) {
+      return [
+        {
+          id: createStepId('entity-details'),
+          intent: 'pathway-search',
+          tool: 'getNodeDetails',
+          description: `Load metadata for ${seedEntities.length} selected or resolved entities.`,
+          params: {
+            nodeIds: seedEntities.map((entity) => entity.id).slice(0, 8),
+          },
+        },
+        {
+          id: createStepId(aggregateMode === 'shared' ? 'shared-pathways' : 'pathway-set'),
+          intent: 'pathway-search',
+          tool: 'getRelatedEntities',
+          description:
+            aggregateMode === 'shared'
+              ? `Find shared pathways connected to ${seedEntities.map((entity) => entity.displayName).join(', ')}.`
+              : `Find pathways connected to ${seedEntities.map((entity) => entity.displayName).join(', ')} and rank them by support.`,
+          params: {
+            nodeIds: seedEntities.map((entity) => entity.id).slice(0, 8),
+            nodeTypes: ['Pathway'],
+            relationshipTypes: this.pickRelationshipTypes(query, extractedQuery),
+            aggregateMode,
+            minSupport: this.pickMinimumSupport(seedEntities.length, aggregateMode),
+            limit: 20,
+          },
+        },
+      ];
+    }
+
     if (primary && extractedQuery.intent.operation === 'drug-search') {
+      if (seedEntities.length > 1 && seedEntities.every((entity) => /(gene|protein)/i.test(entity.typeName))) {
+        return [
+          {
+            id: createStepId('entity-details'),
+            intent: 'drug-search',
+            tool: 'getNodeDetails',
+            description: `Load metadata for ${seedEntities.length} selected or resolved entities.`,
+            params: {
+              nodeIds: seedEntities.map((entity) => entity.id).slice(0, 8),
+            },
+          },
+          {
+            id: createStepId(aggregateMode === 'shared' ? 'shared-drugs' : 'drug-set'),
+            intent: 'disease-protein-pathway-drug',
+            tool: 'getRelatedEntities',
+            description:
+              aggregateMode === 'shared'
+                ? `Find drugs shared across ${seedEntities.map((entity) => entity.displayName).join(', ')}.`
+                : `Find drugs connected to ${seedEntities.map((entity) => entity.displayName).join(', ')} and rank them by support.`,
+            params: {
+              nodeIds: seedEntities.map((entity) => entity.id).slice(0, 8),
+              nodeTypes: ['Drug'],
+              relationshipTypes: this.pickRelationshipTypes(query, extractedQuery),
+              aggregateMode,
+              minSupport: this.pickMinimumSupport(seedEntities.length, aggregateMode),
+              limit: 20,
+            },
+          },
+        ];
+      }
+
       return [
         {
           id: createStepId('entity-details'),
@@ -279,7 +373,7 @@ export class RetrievalPlannerService {
     explicitEntities: ResolvedEntity[];
     conceptResolvedEntities: ResolvedEntity[];
     state: ConversationGraphState;
-    selectedNodeContext: Array<{ id: string; label: string }>;
+    selectedNodeContext: Array<{ id: string; label: string; nodeType?: string }>;
   }) {
     const { query, extractedQuery, explicitEntities, conceptResolvedEntities, state, selectedNodeContext } = params;
     const selectedIds = new Set(selectedNodeContext.map((node) => node.id));
@@ -350,7 +444,7 @@ export class RetrievalPlannerService {
     resolvedEntities: ResolvedEntity[],
     primary: ResolvedEntity | undefined,
     state: ConversationGraphState,
-    selectedNodeContext: Array<{ id: string; label: string }>,
+    selectedNodeContext: Array<{ id: string; label: string; nodeType?: string }>,
   ) {
     const selectedIds = selectedNodeContext.map((node) => node.id).filter((nodeId) => nodeId.length > 0);
     if (selectedIds.length > 0) {
@@ -410,8 +504,22 @@ export class RetrievalPlannerService {
       );
     }
 
+    if (extractedQuery.intent.operation === 'drug-indications') {
+      ['INDICATED_FOR', 'TREATS', 'APPROVED_FOR', 'HAS_INDICATION', 'ASSOCIATED_WITH'].forEach((type) =>
+        relationshipTypes.add(type),
+      );
+    }
+
     if (normalized.includes('pathway')) {
-      ['INVOLVED_IN', 'PART_OF', 'ASSOCIATED_WITH'].forEach((type) => relationshipTypes.add(type));
+      ['INVOLVED_IN', 'PART_OF', 'ASSOCIATED_WITH', 'PARTICIPATES_IN'].forEach((type) =>
+        relationshipTypes.add(type),
+      );
+    }
+
+    if (normalized.includes('target')) {
+      ['TARGETS', 'TARGET_OF', 'INTERACTS_WITH', 'ASSOCIATED_WITH'].forEach((type) =>
+        relationshipTypes.add(type),
+      );
     }
 
     if (normalized.includes('related') || normalized.includes('linked') || normalized.includes('role')) {
@@ -455,5 +563,39 @@ export class RetrievalPlannerService {
     }
 
     return score;
+  }
+
+  private pickSeedEntities(explicitEntities: ResolvedEntity[], extractedQuery: ExtractedQuery) {
+    const selectedEntities = explicitEntities.filter((entity) => entity.source === 'selected');
+
+    if (extractedQuery.selectionReferences.length > 0 && selectedEntities.length > 0) {
+      return selectedEntities;
+    }
+
+    return explicitEntities;
+  }
+
+  private pickAggregateMode(query: string, extractedQuery: ExtractedQuery) {
+    const normalized = query.toLowerCase();
+    if (
+      extractedQuery.operatorSignals.includes('shared') ||
+      extractedQuery.operatorSignals.includes('common') ||
+      /\bshared\b/.test(normalized) ||
+      /\bcommon\b/.test(normalized) ||
+      /\ball of\b/.test(normalized) ||
+      /\beach of\b/.test(normalized)
+    ) {
+      return 'shared' as const;
+    }
+
+    return 'union' as const;
+  }
+
+  private pickMinimumSupport(seedCount: number, aggregateMode: 'shared' | 'union') {
+    if (aggregateMode === 'shared') {
+      return Math.max(2, seedCount);
+    }
+
+    return 1;
   }
 }

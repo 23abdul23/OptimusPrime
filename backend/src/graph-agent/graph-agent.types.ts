@@ -52,6 +52,7 @@ export interface QueryIntentClassification {
     | 'path-search'
     | 'entity-search'
     | 'drug-search'
+    | 'drug-indications'
     | 'pathway-search'
     | 'guideline-search'
     | 'graph-expansion'
@@ -68,6 +69,8 @@ export interface ExtractedQuery {
   query: string;
   mentions: ExtractedMention[];
   concepts: ExtractedConcept[];
+  selectionReferences: string[];
+  operatorSignals: string[];
   intent: QueryIntentClassification;
 }
 
@@ -80,6 +83,31 @@ export interface ResolvedEntity {
   confidence: number;
   matchedOn: string[];
   source: ExtractedMention['source'] | 'concept' | 'selected' | 'memory';
+}
+
+export interface GraphSelectionNodeContext {
+  id: string;
+  label: string;
+  nodeType?: string;
+}
+
+export interface GraphSelectionEdgeContext {
+  id: string;
+  source: string;
+  target: string;
+  relation?: string;
+}
+
+export interface GraphNetworkContext {
+  totalNodes: number;
+  totalEdges: number;
+  selectedNodeIds?: string[];
+  visibleNodeIds?: string[];
+  visibleEdgeIds?: string[];
+  topNodeTypes?: Array<{
+    type: string;
+    count: number;
+  }>;
 }
 
 export interface RetrievalPlanStep {
@@ -132,6 +160,9 @@ export interface ConversationGraphState {
   priorQueries: string[];
   lastPlan: RetrievalPlanStep[];
   selectedNodeIds: string[];
+  selectedEdgeIds: string[];
+  visibleNodeIds: string[];
+  visibleEdgeIds: string[];
   updatedAt: string;
 }
 

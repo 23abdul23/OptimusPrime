@@ -2,14 +2,18 @@
 
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
-import { BookmarkIcon, CheckIcon, RefreshCcwIcon } from 'lucide-react';
+import { BookmarkIcon, BugIcon, CheckIcon, RefreshCcwIcon } from 'lucide-react';
 import React from 'react';
 import { toast } from 'sonner';
 import { LLM_MODELS } from '@/lib/data';
 import type {
   GraphAction,
   GraphAgentUIMessage,
+  ConversationGraphState,
   GraphEvidenceBundle,
+  GraphNetworkContext,
+  GraphSelectionEdgeContext,
+  GraphSelectionNodeContext,
 } from '@/lib/graph-agent-types';
 import { useKGStore } from '@/lib/hooks/use-kg-store';
 import { generateSessionId, getUserId } from '@/lib/langfuse-tracking';
@@ -80,11 +84,23 @@ type GraphStatePart = {
   id?: string;
   data: {
     sessionId: string;
-    state: {
-      updatedAt: string;
-    };
+    state: ConversationGraphState;
   };
 };
+
+type GraphAgentDebugPayload = {
+  query: string;
+  model: string;
+  sessionId: string;
+  selectedNodeContext: GraphSelectionNodeContext[];
+  selectedEdgeContext: GraphSelectionEdgeContext[];
+  networkContext?: GraphNetworkContext;
+  createdAt: string;
+};
+
+const GRAPH_AGENT_DEBUG_ENABLED = /^(1|true|yes|on)$/i.test(
+  process.env.NEXT_PUBLIC_GRAPH_AGENT_DEBUG ?? '',
+);
 
 function sanitizeMessageParts(parts: GraphAgentPart[]): GraphAgentPart[] {
   return parts.filter((part) => part.type === 'text' || part.type === 'file');
@@ -146,6 +162,7 @@ export interface KGChatRenderProps {
   restoreToCheckpoint: (messageIndex: number) => void;
   renderMessages: (alert?: { component: React.ReactNode; show: boolean }) => React.ReactNode;
   renderPromptInput: () => React.ReactNode;
+  renderDebugPanel: () => React.ReactNode;
 }
 
 function GraphEvidencePanel({ bundle }: { bundle: GraphEvidenceBundle }) {
@@ -212,6 +229,233 @@ function GraphActionsPanel({ actions }: { actions: GraphAction[] }) {
   );
 }
 
+function DebugSection({
+  title,
+  value,
+  tone = 'slate',
+}: {
+  title: string;
+  value: React.ReactNode;
+  tone?: 'slate' | 'amber' | 'emerald';
+}) {
+  const toneClass =
+    tone === 'amber'
+      ? 'border-amber-200 bg-amber-50'
+      : tone === 'emerald'
+        ? 'border-emerald-200 bg-emerald-50'
+        : 'border-slate-200 bg-slate-50';
+
+  return (
+    <div className={`rounded-md border p-3 ${toneClass}`}>
+      <div className='mb-1 font-medium text-slate-900 text-xs uppercase tracking-wide'>{title}</div>
+      <div className='text-slate-700 text-sm'>{value}</div>
+    </div>
+  );
+}
+
+function DebugCode({ value }: { value: unknown }) {
+  return (
+    <pre className='max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-slate-950 p-2 text-[11px] text-slate-100'>
+      {JSON.stringify(value, null, 2)}
+    </pre>
+  );
+}
+
+function GraphAgentDebugPanel(props: {
+  liveContext: {
+    selectedNodeContext: GraphSelectionNodeContext[];
+    selectedEdgeContext: GraphSelectionEdgeContext[];
+    networkContext?: GraphNetworkContext;
+  };
+  lastPayload: GraphAgentDebugPayload | null;
+  latestEvidence: GraphEvidenceBundle | null;
+  latestGraphState: GraphStatePart['data'] | null;
+  status: ReturnType<typeof useChat<GraphAgentUIMessage>>['status'];
+}) {
+  const { liveContext, lastPayload, latestEvidence, latestGraphState, status } = props;
+  const liveSummary = {
+    selectedNodes: liveContext.selectedNodeContext.length,
+    selectedEdges: liveContext.selectedEdgeContext.length,
+    totalNodes: liveContext.networkContext?.totalNodes ?? 0,
+    totalEdges: liveContext.networkContext?.totalEdges ?? 0,
+  };
+  const latestWarnings = latestEvidence?.warnings ?? [];
+  const backendState = latestGraphState?.state;
+
+  return (
+    <aside className='flex h-full w-[360px] shrink-0 flex-col border-l bg-white'>
+      <div className='flex items-center gap-2 border-b px-4 py-3'>
+        <BugIcon className='size-4 text-slate-500' />
+        <div>
+          <div className='font-semibold text-sm text-slate-900'>Graph Agent Debug</div>
+          <div className='text-slate-500 text-xs'>Live client context and latest backend state</div>
+        </div>
+      </div>
+      <div className='flex-1 space-y-3 overflow-y-auto p-3'>
+        <DebugSection
+          title='Live Context'
+          tone={liveSummary.selectedNodes > 0 ? 'emerald' : 'amber'}
+          value={
+            <div className='space-y-1'>
+              <div>Selected nodes: {liveSummary.selectedNodes}</div>
+              <div>Selected edges: {liveSummary.selectedEdges}</div>
+              <div>Visible network: {liveSummary.totalNodes} nodes / {liveSummary.totalEdges} edges</div>
+            </div>
+          }
+        />
+        <DebugSection
+          title='Selected Nodes'
+          value={
+            liveContext.selectedNodeContext.length > 0 ? (
+              <DebugCode value={liveContext.selectedNodeContext} />
+            ) : (
+              <span className='text-slate-500'>No nodes currently selected.</span>
+            )
+          }
+        />
+        <DebugSection
+          title='Selected Edges'
+          value={
+            liveContext.selectedEdgeContext.length > 0 ? (
+              <DebugCode value={liveContext.selectedEdgeContext} />
+            ) : (
+              <span className='text-slate-500'>No selected-edge context derived from the current selection.</span>
+            )
+          }
+        />
+        <DebugSection
+          title='Network Context'
+          value={
+            liveContext.networkContext ? (
+              <DebugCode value={liveContext.networkContext} />
+            ) : (
+              <span className='text-slate-500'>Sigma graph is not available yet.</span>
+            )
+          }
+        />
+        <DebugSection
+          title='Last Sent Payload'
+          tone={lastPayload ? 'emerald' : 'amber'}
+          value={
+            lastPayload ? (
+              <DebugCode value={lastPayload} />
+            ) : (
+              <span className='text-slate-500'>No request has been sent in this session yet.</span>
+            )
+          }
+        />
+        <DebugSection
+          title='Latest Evidence'
+          tone={latestEvidence?.insufficientEvidence ? 'amber' : latestEvidence ? 'emerald' : 'slate'}
+          value={
+            latestEvidence ? (
+              <div className='space-y-2'>
+                <div>Status: {latestEvidence.insufficientEvidence ? 'Partial / insufficient' : 'Grounded'}</div>
+                <div>Resolved entities: {latestEvidence.resolvedEntities.length}</div>
+                <div>Evidence items: {latestEvidence.items.length}</div>
+                <div>Plan steps: {latestEvidence.plan.length}</div>
+                {latestWarnings.length > 0 && <DebugCode value={latestWarnings} />}
+              </div>
+            ) : (
+              <span className='text-slate-500'>No graph evidence received yet.</span>
+            )
+          }
+        />
+        <DebugSection
+          title='Latest Backend State'
+          value={
+            latestGraphState ? (
+              <div className='space-y-2'>
+                <div>Session: {latestGraphState.sessionId}</div>
+                <div>Updated: {new Date(latestGraphState.state.updatedAt).toLocaleTimeString()}</div>
+                <DebugCode
+                  value={{
+                    activeEntities: backendState?.activeEntities ?? [],
+                    selectedNodeIds: backendState?.selectedNodeIds ?? [],
+                    selectedEdgeIds: backendState?.selectedEdgeIds ?? [],
+                    visibleNodeIds: backendState?.visibleNodeIds?.slice(0, 24) ?? [],
+                    visibleEdgeIds: backendState?.visibleEdgeIds?.slice(0, 24) ?? [],
+                    lastPlan: backendState?.lastPlan ?? [],
+                  }}
+                />
+              </div>
+            ) : (
+              <span className='text-slate-500'>No backend graph state received yet.</span>
+            )
+          }
+        />
+        <DebugSection title='Chat Status' value={<div>{status}</div>} />
+      </div>
+    </aside>
+  );
+}
+
+function buildGraphAgentContext(
+  selectedNodes: string[],
+  sigmaInstance: ReturnType<typeof useKGStore.getState>['sigmaInstance'],
+) {
+  const graph = sigmaInstance?.getGraph();
+  const selectedNodeContext: GraphSelectionNodeContext[] = selectedNodes.map((nodeId) => {
+    const label = graph?.getNodeAttribute(nodeId, 'label') || nodeId;
+    const nodeType =
+      String(graph?.getNodeAttribute(nodeId, 'nodeType') ?? graph?.getNodeAttribute(nodeId, 'typeCode') ?? '') ||
+      undefined;
+    return { id: nodeId, label, nodeType };
+  });
+  const selectedNodeSet = new Set(selectedNodes);
+  const selectedEdgeContext: GraphSelectionEdgeContext[] = [];
+
+  if (graph && selectedNodeSet.size > 1) {
+    graph.forEachEdge((edgeId, attributes, source, target) => {
+      if (!selectedNodeSet.has(source) || !selectedNodeSet.has(target) || selectedEdgeContext.length >= 64) {
+        return;
+      }
+
+      selectedEdgeContext.push({
+        id: edgeId,
+        source,
+        target,
+        relation:
+          typeof attributes.relation === 'string'
+            ? attributes.relation
+            : typeof attributes.label === 'string'
+              ? attributes.label
+              : undefined,
+      });
+    });
+  }
+
+  const networkContext: GraphNetworkContext | undefined = graph
+    ? {
+        totalNodes: graph.order,
+        totalEdges: graph.size,
+        selectedNodeIds: selectedNodes,
+        visibleNodeIds: graph.nodes().slice(0, 160),
+        visibleEdgeIds: graph.edges().slice(0, 320),
+        topNodeTypes: (() => {
+          const counts = new Map<string, number>();
+          graph.forEachNode((nodeId) => {
+            const nodeType = String(
+              graph.getNodeAttribute(nodeId, 'nodeType') ?? graph.getNodeAttribute(nodeId, 'typeCode') ?? 'Entity',
+            );
+            counts.set(nodeType, (counts.get(nodeType) ?? 0) + 1);
+          });
+
+          return [...counts.entries()]
+            .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+            .slice(0, 6)
+            .map(([type, count]) => ({ type, count }));
+        })(),
+      }
+    : undefined;
+
+  return {
+    selectedNodeContext,
+    selectedEdgeContext,
+    networkContext,
+  };
+}
+
 export function KGChat({ onChatOpen, children }: KGChatProps) {
   const [model, setModel] = React.useState<(typeof LLM_MODELS)[number]['id']>(LLM_MODELS[0].id);
   const [modelSelectorOpen, setModelSelectorOpen] = React.useState(false);
@@ -219,8 +463,14 @@ export function KGChat({ onChatOpen, children }: KGChatProps) {
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const processedActionIds = React.useRef<Set<string>>(new Set());
   const sigmaInstance = useKGStore((state) => state.sigmaInstance);
+  const selectedNodes = useKGStore((state) => state.selectedNodes);
+  const [lastDebugPayload, setLastDebugPayload] = React.useState<GraphAgentDebugPayload | null>(null);
 
   const sessionId = React.useMemo(() => generateSessionId(), []);
+  const liveContext = React.useMemo(
+    () => buildGraphAgentContext(selectedNodes, sigmaInstance),
+    [selectedNodes, sigmaInstance],
+  );
 
   const { messages, setMessages, sendMessage, status, regenerate, stop, clearError } = useChat<GraphAgentUIMessage>({
     transport: new DefaultChatTransport({
@@ -241,6 +491,26 @@ export function KGChat({ onChatOpen, children }: KGChatProps) {
       });
     },
   });
+  const latestEvidence = React.useMemo(() => {
+    for (const message of [...messages].reverse()) {
+      for (const part of [...message.parts].reverse()) {
+        if (isGraphEvidencePart(part)) {
+          return part.data;
+        }
+      }
+    }
+    return null;
+  }, [messages]);
+  const latestGraphState = React.useMemo(() => {
+    for (const message of [...messages].reverse()) {
+      for (const part of [...message.parts].reverse()) {
+        if (isGraphStatePart(part)) {
+          return part.data;
+        }
+      }
+    }
+    return null;
+  }, [messages]);
 
   React.useEffect(() => {
     if (!sigmaInstance) {
@@ -316,20 +586,16 @@ export function KGChat({ onChatOpen, children }: KGChatProps) {
     }
 
     onChatOpen?.(true);
-
-    const selectedNodes = useKGStore.getState().selectedNodes || [];
-    const graph = useKGStore.getState().sigmaInstance?.getGraph();
-    const selectedNodeContext = selectedNodes.map((nodeId) => {
-      const label = graph?.getNodeAttribute(nodeId, 'label') || nodeId;
-      return { id: nodeId, label };
+    const { selectedNodeContext, selectedEdgeContext, networkContext } = liveContext;
+    setLastDebugPayload({
+      query: message.text,
+      model,
+      sessionId,
+      selectedNodeContext,
+      selectedEdgeContext,
+      networkContext,
+      createdAt: new Date().toISOString(),
     });
-    const networkContext = graph
-      ? {
-          totalNodes: graph.order,
-          totalEdges: graph.size,
-          selectedNodeIds: selectedNodes,
-        }
-      : undefined;
 
     sendMessage(
       { text: message.text, files: message.files },
@@ -339,6 +605,7 @@ export function KGChat({ onChatOpen, children }: KGChatProps) {
           sessionId,
           userId: getUserId(),
           selectedNodeContext,
+          selectedEdgeContext,
           networkContext,
         },
       },
@@ -542,6 +809,22 @@ export function KGChat({ onChatOpen, children }: KGChatProps) {
     );
   };
 
+  const renderDebugPanel = () => {
+    if (!GRAPH_AGENT_DEBUG_ENABLED) {
+      return null;
+    }
+
+    return (
+      <GraphAgentDebugPanel
+        liveContext={liveContext}
+        lastPayload={lastDebugPayload}
+        latestEvidence={latestEvidence}
+        latestGraphState={latestGraphState}
+        status={status}
+      />
+    );
+  };
+
   if (children) {
     return (
       <>
@@ -559,6 +842,7 @@ export function KGChat({ onChatOpen, children }: KGChatProps) {
           restoreToCheckpoint,
           renderMessages,
           renderPromptInput,
+          renderDebugPanel,
         })}
       </>
     );

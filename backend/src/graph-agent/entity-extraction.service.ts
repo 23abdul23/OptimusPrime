@@ -10,6 +10,7 @@ const CAPTURED_PHRASE_STOPWORDS = new Set([
   'a',
   'an',
   'the',
+  'for',
   'this',
   'that',
   'these',
@@ -20,6 +21,45 @@ const CAPTURED_PHRASE_STOPWORDS = new Set([
   'new',
   'also',
 ]);
+
+const SELECTION_REFERENCE_PATTERNS = [
+  /\bthis gene\b/gi,
+  /\bthis protein\b/gi,
+  /\bthis disease\b/gi,
+  /\bthis relationship\b/gi,
+  /\bthis edge\b/gi,
+  /\bthese genes\b/gi,
+  /\bthese proteins\b/gi,
+  /\bthese diseases\b/gi,
+  /\bthese pathways\b/gi,
+  /\bthese drugs\b/gi,
+  /\bthese relationships\b/gi,
+  /\bthese edges\b/gi,
+  /\bthem\b/gi,
+  /\bthose\b/gi,
+  /\bselected nodes\b/gi,
+  /\bselected edges\b/gi,
+  /\bhighlighted nodes\b/gi,
+  /\bhighlighted edges\b/gi,
+  /\bcurrent graph\b/gi,
+  /\bselected graph\b/gi,
+];
+
+const OPERATOR_SIGNAL_PATTERNS: Array<{ pattern: RegExp; signal: string }> = [
+  { pattern: /\bindicated\b/gi, signal: 'indicated' },
+  { pattern: /\bapproved\b/gi, signal: 'approved' },
+  { pattern: /\bassociated\b/gi, signal: 'associated' },
+  { pattern: /\bcompare\b/gi, signal: 'compare' },
+  { pattern: /\binvolved\b/gi, signal: 'involved' },
+  { pattern: /\bparticipat(?:e|es)\b/gi, signal: 'participates' },
+  { pattern: /\btarget(?:s)?\b/gi, signal: 'target' },
+  { pattern: /\brelated\b/gi, signal: 'related' },
+  { pattern: /\blinked\b/gi, signal: 'linked' },
+  { pattern: /\bconnected\b/gi, signal: 'connected' },
+  { pattern: /\bshared\b/gi, signal: 'shared' },
+  { pattern: /\bcommon\b/gi, signal: 'common' },
+  { pattern: /\ball\b/gi, signal: 'all' },
+];
 
 const CONCEPT_PATTERNS: Array<{ pattern: RegExp; category: ExtractedConcept['category'] }> = [
   { pattern: /\b(cancer|oncology|tumou?r|carcinoma)\b/gi, category: 'disease-area' },
@@ -61,16 +101,29 @@ const SINGLE_MENTION_PATTERNS: Array<{
     typeHints: ['Disease'],
   },
   {
+    pattern: /\bfor which diseases is\s+(.+?)\s+(?:indicated|approved|used)(?:\?|$)/i,
+    typeHints: ['Drug'],
+  },
+  {
     pattern: /\bgenes?\s+(?:associated|related|linked)\s+(?:with|to)\s+(.+?)(?:\?|$)/i,
   },
   {
     pattern: /\bgenes?\s+involved\s+in\s+(.+?)(?:\?|$)/i,
   },
   {
+    pattern: /\bwhich pathways?\s+(?:involve|include|contain)\s+(.+?)(?:\?|$)/i,
+  },
+  {
+    pattern: /\bwhat pathways?\s+do\s+(.+?)\s+participate\s+in(?:\?|$)/i,
+  },
+  {
     pattern: /\bpathways?\s+(?:associated|related|linked)\s+(?:with|to)\s+(.+?)(?:\?|$)/i,
   },
   {
     pattern: /\bproteins?\s+associated\s+with\s+(.+?)(?:\?|$)/i,
+  },
+  {
+    pattern: /\bwhich\s+(?:approved\s+)?drugs?\s+target\s+(.+?)(?:\?|$)/i,
   },
 ];
 
@@ -163,12 +216,16 @@ export class EntityExtractionService {
     const { query } = params;
     const mentions = this.extractMentions(query);
     const concepts = this.extractConcepts(query, mentions);
+    const selectionReferences = this.extractSelectionReferences(query);
+    const operatorSignals = this.extractOperatorSignals(query);
     const intent = this.classifyIntent(query);
 
     return {
       query,
       mentions,
       concepts,
+      selectionReferences,
+      operatorSignals,
       intent,
     };
   }
@@ -283,7 +340,7 @@ export class EntityExtractionService {
       addMention(match[1], match.index, match.index + match[1].length, this.inferTypeHints(match[1]));
     }
 
-    for (const match of query.matchAll(/\b([A-Z][A-Za-z0-9'-]{1,}(?:\s+[A-Za-z0-9'-]+){0,3})\b/g)) {
+    for (const match of query.matchAll(/\b([A-Z][A-Za-z0-9'-]{2,})\b/g)) {
       const text = match[1]?.trim();
       if (!text || match.index === undefined) {
         continue;
@@ -370,6 +427,19 @@ export class EntityExtractionService {
         primary: 'drug-search',
         operation: 'drug-search',
         requestedEntityTypes: requestedEntityTypes.length > 0 ? requestedEntityTypes : ['Drug'],
+        allowContextFallback: true,
+      };
+    }
+
+    if (
+      normalized.includes('indicated') ||
+      normalized.includes('approved for') ||
+      normalized.includes('indication')
+    ) {
+      return {
+        primary: 'drug-search',
+        operation: 'drug-indications',
+        requestedEntityTypes: requestedEntityTypes.length > 0 ? requestedEntityTypes : ['Disease'],
         allowContextFallback: true,
       };
     }
@@ -542,9 +612,34 @@ export class EntityExtractionService {
   }
 
   private shouldDiscardMention(value: string) {
-    return /^(?:what|how|which|does|do|show|give|expand|compare|find|tell|load|retrieve|approved|genes?|proteins?|pathways?|drugs?)\b/i.test(
+    return /^(?:what|how|which|does|do|show|give|expand|compare|find|tell|load|retrieve|approved|genes?|proteins?|pathways?|drugs?|for|is|are|them|those|selected|highlighted|current|indicated|participat(?:e|es)|target(?:s)?|related|linked|connected|associated|involved)\b/i.test(
       value,
     );
+  }
+
+  private extractSelectionReferences(query: string) {
+    const references = new Set<string>();
+
+    for (const pattern of SELECTION_REFERENCE_PATTERNS) {
+      for (const match of query.matchAll(pattern)) {
+        references.add(match[0].toLowerCase());
+      }
+    }
+
+    return [...references];
+  }
+
+  private extractOperatorSignals(query: string) {
+    const signals = new Set<string>();
+
+    for (const { pattern, signal } of OPERATOR_SIGNAL_PATTERNS) {
+      if (pattern.test(query)) {
+        signals.add(signal);
+      }
+      pattern.lastIndex = 0;
+    }
+
+    return [...signals];
   }
 
   private inferRequestedEntityTypes(normalizedQuery: string) {

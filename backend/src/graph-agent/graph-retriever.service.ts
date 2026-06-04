@@ -142,12 +142,24 @@ export class GraphRetrieverService {
             break;
           }
 
-          const related = await this.getRelatedEntities(
-            String(step.params.nodeId),
-            (step.params.nodeTypes as string[] | undefined) ?? [],
-            (step.params.relationshipTypes as string[] | undefined) ?? [],
-            Number(step.params.limit ?? 20),
-          );
+          const relatedNodeIds = Array.isArray(step.params.nodeIds)
+            ? (step.params.nodeIds as string[]).map((nodeId) => String(nodeId)).filter((nodeId) => nodeId.length > 0)
+            : [];
+          const related = relatedNodeIds.length > 1
+              ? await this.getRelatedEntitiesForNodeSet(
+                  relatedNodeIds,
+                  (step.params.nodeTypes as string[] | undefined) ?? [],
+                  (step.params.relationshipTypes as string[] | undefined) ?? [],
+                  String(step.params.aggregateMode ?? 'union') === 'shared' ? 'shared' : 'union',
+                  Number(step.params.minSupport ?? 1),
+                  Number(step.params.limit ?? 20),
+                )
+            : await this.getRelatedEntities(
+                String(step.params.nodeId ?? relatedNodeIds[0]),
+                (step.params.nodeTypes as string[] | undefined) ?? [],
+                (step.params.relationshipTypes as string[] | undefined) ?? [],
+                Number(step.params.limit ?? 20),
+              );
 
           if (related.items.length === 0) {
             warnings.push('No directly related entities matched the requested type filter.');
@@ -609,6 +621,112 @@ export class GraphRetrieverService {
           retrieval: 'related-entities',
         }),
         items,
+      };
+    } finally {
+      await this.neo4jService.releaseSession(session);
+    }
+  }
+
+  private async getRelatedEntitiesForNodeSet(
+    nodeIds: string[],
+    nodeTypes: string[],
+    relationshipTypes: string[],
+    aggregateMode: 'shared' | 'union',
+    minSupport: number,
+    limit: number,
+  ) {
+    const session = this.neo4jService.getSession();
+    const dedupedNodeIds = Array.from(new Set(nodeIds.filter((nodeId) => nodeId.trim().length > 0)));
+
+    try {
+      const result = await session.run(
+        `
+          MATCH (start:Entity)-[rel]-(neighbor:Entity)
+          WHERE start.id IN $nodeIds
+            AND (size($nodeTypes) = 0 OR neighbor.typeName IN $nodeTypes OR neighbor.typeCode IN $nodeTypes)
+            AND (
+              size($relationshipTypes) = 0
+              OR type(rel) IN $relationshipTypes
+              OR coalesce(rel.labelCode, '') IN $relationshipTypes
+            )
+          WITH neighbor, collect(DISTINCT start) AS starts, collect(rel) AS rels
+          WHERE size(starts) >= $minSupport
+          RETURN neighbor, starts, rels,
+            size(starts) AS support,
+            reduce(total = 0.0, relationship IN rels | total + coalesce(relationship.score, 0.0)) AS totalScore
+          ORDER BY support DESC, totalScore DESC, neighbor.displayName
+          LIMIT $limit
+        `,
+        {
+          nodeIds: dedupedNodeIds,
+          nodeTypes,
+          relationshipTypes,
+          minSupport: neo4j.int(Math.max(1, Math.trunc(toNumber(minSupport)))),
+          limit: neo4j.int(Math.max(1, Math.trunc(toNumber(limit)))),
+        },
+      );
+
+      const nodes: Neo4jNode[] = [];
+      const relationships: Neo4jRelationship[] = [];
+      const items: GraphEvidenceItem[] = [];
+      const highlightNodeIds = new Set<string>(dedupedNodeIds);
+
+      for (const [index, record] of result.records.entries()) {
+        const neighbor = record.get('neighbor') as Neo4jNode;
+        const starts = record.get('starts') as Neo4jNode[];
+        const rels = record.get('rels') as Neo4jRelationship[];
+        const support = toNumber(record.get('support'));
+        const totalScore = toNumber(record.get('totalScore'));
+        const provenance = rels.flatMap((relationship) => {
+          const relProps = relationship.properties as Record<string, unknown>;
+          return [...parseStringArray(relProps.sourceDirect), ...parseStringArray(relProps.sourceIndirect)];
+        });
+        const relationTypes = Array.from(new Set(rels.map((relationship) => relationship.type)));
+        const startNames = starts.map((start) => String(start.properties.displayName));
+        const neighborDescription =
+          typeof neighbor.properties.description === 'string' ? String(neighbor.properties.description) : undefined;
+
+        nodes.push(neighbor, ...starts);
+        relationships.push(...rels);
+        highlightNodeIds.add(String(neighbor.properties.id));
+
+        items.push({
+          id: `shared-related-${index}-${String(neighbor.properties.id)}`,
+          kind: 'path',
+          title: `${aggregateMode === 'shared' ? 'Shared' : 'Ranked'} ${String(neighbor.properties.typeName ?? neighbor.properties.typeCode ?? 'entity')}: ${String(neighbor.properties.displayName)}`,
+          summary: [
+            aggregateMode === 'shared'
+              ? `${String(neighbor.properties.displayName)} is shared across ${support} selected anchors: ${startNames.join(', ')}.`
+              : `${String(neighbor.properties.displayName)} is connected to ${support} selected anchors: ${startNames.join(', ')}.`,
+            relationTypes.length > 0 ? `Relations: ${relationTypes.join(', ')}.` : '',
+            neighborDescription ? `Description: ${neighborDescription}` : '',
+            provenance.length > 0 ? `Sources: ${Array.from(new Set(provenance)).slice(0, 6).join(', ')}.` : '',
+          ]
+            .filter((part) => part.length > 0)
+            .join(' '),
+          score: Math.min(0.97, 0.66 + support * 0.08 + Math.min(0.12, totalScore * 0.04)),
+          nodeIds: [...starts.map((start) => String(start.properties.id)), String(neighbor.properties.id)],
+          edgeIds: rels.map((relationship) => String(relationship.properties.edgeKey ?? relationship.elementId)),
+          metadata: compactRecord({
+            support,
+            supportNodeIds: starts.map((start) => String(start.properties.id)),
+            supportNodeLabels: startNames,
+            relationTypes,
+            provenance: Array.from(new Set(provenance)).slice(0, 8),
+            neighborType: String(neighbor.properties.typeName ?? neighbor.properties.typeCode ?? 'Entity'),
+            neighborDescription,
+            aggregateMode,
+          }),
+        });
+      }
+
+      return {
+        graph: serializeGraphFromRecords(nodes, relationships, {
+          sourceIds: dedupedNodeIds,
+          retrieval: 'shared-related-entities',
+        }),
+        items,
+        highlightNodeIds: [...highlightNodeIds],
       };
     } finally {
       await this.neo4jService.releaseSession(session);

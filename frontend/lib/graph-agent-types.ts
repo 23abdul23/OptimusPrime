@@ -12,6 +12,31 @@ export interface ResolvedEntity {
   source: 'query' | 'selected' | 'memory';
 }
 
+export interface GraphSelectionNodeContext {
+  id: string;
+  label: string;
+  nodeType?: string;
+}
+
+export interface GraphSelectionEdgeContext {
+  id: string;
+  source: string;
+  target: string;
+  relation?: string;
+}
+
+export interface GraphNetworkContext {
+  totalNodes: number;
+  totalEdges: number;
+  selectedNodeIds?: string[];
+  visibleNodeIds?: string[];
+  visibleEdgeIds?: string[];
+  topNodeTypes?: Array<{
+    type: string;
+    count: number;
+  }>;
+}
+
 export interface RetrievalPlanStep {
   id: string;
   intent: string;
@@ -50,6 +75,9 @@ export interface ConversationGraphState {
   priorQueries: string[];
   lastPlan: RetrievalPlanStep[];
   selectedNodeIds: string[];
+  selectedEdgeIds: string[];
+  visibleNodeIds: string[];
+  visibleEdgeIds: string[];
   updatedAt: string;
 }
 

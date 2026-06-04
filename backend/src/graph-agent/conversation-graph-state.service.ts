@@ -26,6 +26,9 @@ export class ConversationGraphStateService {
       priorQueries: [],
       lastPlan: [],
       selectedNodeIds: [],
+      selectedEdgeIds: [],
+      visibleNodeIds: [],
+      visibleEdgeIds: [],
       updatedAt: new Date().toISOString(),
     };
   }
@@ -67,6 +70,9 @@ export class ConversationGraphStateService {
       evidenceCache: state.evidenceCache.slice(0, MAX_EVIDENCE_ITEMS),
       priorQueries: state.priorQueries.slice(0, MAX_PRIOR_QUERIES),
       selectedNodeIds: [...new Set(state.selectedNodeIds)].slice(0, 32),
+      selectedEdgeIds: [...new Set(state.selectedEdgeIds)].slice(0, 64),
+      visibleNodeIds: [...new Set(state.visibleNodeIds)].slice(0, MAX_TRACKED_NODE_IDS),
+      visibleEdgeIds: [...new Set(state.visibleEdgeIds)].slice(0, MAX_TRACKED_NODE_IDS * 2),
       updatedAt: new Date().toISOString(),
     };
   }

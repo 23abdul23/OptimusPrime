@@ -57,7 +57,7 @@ export function KGChatWindow() {
 
   return (
     <KGChat onChatOpen={setIsChatOpen}>
-      {({ messages, handleDeleteMessages, renderMessages, renderPromptInput }) => (
+      {({ messages, handleDeleteMessages, renderMessages, renderPromptInput, renderDebugPanel }) => (
         <div className='relative mx-auto flex w-full flex-col items-center'>
           {isChatOpen && (
             <div
@@ -89,49 +89,54 @@ export function KGChatWindow() {
                   </button>
                 </div>
               </div>
-              <div className='min-h-0 flex-1 overflow-y-auto'>
-                {renderMessages({
-                  show: showAlert,
-                  component: (
-                    <center>
-                      <Alert className='w-3/4'>
-                        <TriangleAlertIcon size={20} />
-                        <AlertTitle className='flex w-full items-center justify-between font-bold'>
-                          Knowledge Graph AI Assistant{' '}
-                          <XIcon
-                            size={15}
-                            className='m-2 rounded hover:border'
-                            onClick={() => {
-                              localStorage.setItem('showKGChatAlert', 'false');
-                              setShowAlert(false);
-                            }}
-                          />
-                        </AlertTitle>
-                        <AlertDescription>
-                          <p className='items-center text-sm'>
-                            This AI assistant can analyze and query your knowledge graph using natural language. It has
-                            access to graph structure, properties, and can perform various graph algorithms. Results may
-                            occasionally be incorrect. By using this service, you agree to our{' '}
-                            <Link
-                              href='/docs/terms-of-use'
-                              className='font-medium underline underline-offset-4 hover:text-primary'
-                            >
-                              Terms of Use
-                            </Link>{' '}
-                            and{' '}
-                            <Link
-                              href='/docs/privacy-policy'
-                              className='font-medium underline underline-offset-4 hover:text-primary'
-                            >
-                              Privacy Policy
-                            </Link>
-                            .
-                          </p>
-                        </AlertDescription>
-                      </Alert>
-                    </center>
-                  ),
-                })}
+              <div className='min-h-0 flex-1 overflow-hidden'>
+                <div className='flex h-full min-h-0'>
+                  <div className='min-w-0 flex-1'>
+                    {renderMessages({
+                      show: showAlert,
+                      component: (
+                        <center>
+                          <Alert className='w-3/4'>
+                            <TriangleAlertIcon size={20} />
+                            <AlertTitle className='flex w-full items-center justify-between font-bold'>
+                              Knowledge Graph AI Assistant{' '}
+                              <XIcon
+                                size={15}
+                                className='m-2 rounded hover:border'
+                                onClick={() => {
+                                  localStorage.setItem('showKGChatAlert', 'false');
+                                  setShowAlert(false);
+                                }}
+                              />
+                            </AlertTitle>
+                            <AlertDescription>
+                              <p className='items-center text-sm'>
+                                This AI assistant can analyze and query your knowledge graph using natural language. It has
+                                access to graph structure, properties, and can perform various graph algorithms. Results may
+                                occasionally be incorrect. By using this service, you agree to our{' '}
+                                <Link
+                                  href='/docs/terms-of-use'
+                                  className='font-medium underline underline-offset-4 hover:text-primary'
+                                >
+                                  Terms of Use
+                                </Link>{' '}
+                                and{' '}
+                                <Link
+                                  href='/docs/privacy-policy'
+                                  className='font-medium underline underline-offset-4 hover:text-primary'
+                                >
+                                  Privacy Policy
+                                </Link>
+                                .
+                              </p>
+                            </AlertDescription>
+                          </Alert>
+                        </center>
+                      ),
+                    })}
+                  </div>
+                  {renderDebugPanel()}
+                </div>
               </div>
             </div>
           )}

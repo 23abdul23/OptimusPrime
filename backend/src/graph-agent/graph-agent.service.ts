@@ -7,7 +7,15 @@ import { EntityResolutionService } from './entity-resolution.service';
 import { EvidenceSelectionService } from './evidence-selection.service';
 import { GraphRetrieverService } from './graph-retriever.service';
 import type { GraphAgentChatRequestDto } from './graph-agent.dto';
-import type { ConversationGraphState, GraphAgentUIMessage } from './graph-agent.types';
+import type {
+  ConversationGraphState,
+  GraphAgentUIMessage,
+  GraphEvidenceItem,
+  GraphNetworkContext,
+  GraphSelectionEdgeContext,
+  GraphSelectionNodeContext,
+  ResolvedEntity,
+} from './graph-agent.types';
 import { extractLatestUserText } from './graph-agent.utils';
 import { ResponseSynthesisService } from './response-synthesis.service';
 import { RetrievalPlannerService } from './retrieval-planner.service';
@@ -42,6 +50,12 @@ export class GraphAgentService {
 
         const previousState = await this.conversationStateService.getConversationGraphState(sessionId);
         const extractedQuery = this.entityExtractionService.extractQuery({ query });
+        const selectedEntities = this.buildSelectedContextEntities(promptDto.selectedNodeContext ?? []);
+        const selectedEdgeEvidence = this.buildSelectedEdgeContextEvidence(
+          promptDto.selectedEdgeContext ?? [],
+          promptDto.selectedNodeContext ?? [],
+          extractedQuery.selectionReferences.length > 0,
+        );
 
         if (extractedQuery.intent.operation === 'network-summary' && promptDto.networkContext) {
           const evidenceBundle = this.buildNetworkSummaryBundle(query, promptDto.networkContext);
@@ -49,6 +63,8 @@ export class GraphAgentService {
             ...previousState,
             sessionId,
             selectedNodeIds: promptDto.networkContext.selectedNodeIds ?? previousState.selectedNodeIds,
+            visibleNodeIds: promptDto.networkContext.visibleNodeIds ?? previousState.visibleNodeIds,
+            visibleEdgeIds: promptDto.networkContext.visibleEdgeIds ?? previousState.visibleEdgeIds,
             updatedAt: new Date().toISOString(),
           });
 
@@ -77,16 +93,21 @@ export class GraphAgentService {
           return;
         }
 
-        const resolvedEntities = await this.entityResolutionService.resolveEntities(
+        const resolvedQueryEntities = await this.entityResolutionService.resolveEntities(
           extractedQuery.mentions,
           extractedQuery.concepts,
         );
-        const unresolvedMentions = this.getUnresolvedMentionTexts(extractedQuery.mentions, resolvedEntities);
+        const resolvedEntities = this.combineResolvedEntities({
+          resolvedQueryEntities,
+          selectedEntities,
+          extractedQuery,
+        });
+        const unresolvedMentions = this.getUnresolvedMentionTexts(extractedQuery.mentions, resolvedQueryEntities);
 
         if (this.shouldBlockOnUnresolvedMentions(extractedQuery.mentions.length, extractedQuery.intent.operation, unresolvedMentions)) {
           const evidenceBundle = this.evidenceSelectionService.buildBundle({
             query,
-            items: [],
+            items: selectedEdgeEvidence,
             resolvedEntities,
             plan: [
               {
@@ -102,6 +123,8 @@ export class GraphAgentService {
             warnings: [
               `I could not confidently resolve these explicit mentions from OptimusKG metadata: ${unresolvedMentions.join(', ')}.`,
             ],
+            selectedNodeIds: (promptDto.selectedNodeContext ?? []).map((node) => node.id),
+            visibleNodeIds: promptDto.networkContext?.visibleNodeIds ?? previousState.visibleNodeIds,
           });
 
           const nextState = await this.conversationStateService.saveConversationGraphState(
@@ -111,6 +134,8 @@ export class GraphAgentService {
               resolvedEntities,
               evidenceBundle,
               selectedNodeIds: (promptDto.selectedNodeContext ?? []).map((node) => node.id),
+              selectedEdgeIds: (promptDto.selectedEdgeContext ?? []).map((edge) => edge.id),
+              networkContext: promptDto.networkContext,
             }),
           );
 
@@ -149,10 +174,12 @@ export class GraphAgentService {
         const retrieval = await this.graphRetrieverService.executePlan(plan, resolvedEntities);
         const evidenceBundle = this.evidenceSelectionService.buildBundle({
           query,
-          items: retrieval.evidence,
+          items: [...selectedEdgeEvidence, ...retrieval.evidence],
           resolvedEntities,
           plan,
           warnings: retrieval.warnings,
+          selectedNodeIds: (promptDto.selectedNodeContext ?? []).map((node) => node.id),
+          visibleNodeIds: promptDto.networkContext?.visibleNodeIds ?? previousState.visibleNodeIds,
         });
 
         const nextState = await this.conversationStateService.saveConversationGraphState(
@@ -162,6 +189,8 @@ export class GraphAgentService {
             resolvedEntities,
             evidenceBundle,
             selectedNodeIds: (promptDto.selectedNodeContext ?? []).map((node) => node.id),
+            selectedEdgeIds: (promptDto.selectedEdgeContext ?? []).map((edge) => edge.id),
+            networkContext: promptDto.networkContext,
           }),
         );
 
@@ -214,6 +243,8 @@ export class GraphAgentService {
     resolvedEntities: ConversationGraphState['activeEntities'];
     evidenceBundle: ReturnType<EvidenceSelectionService['buildBundle']>;
     selectedNodeIds: string[];
+    selectedEdgeIds: string[];
+    networkContext?: GraphNetworkContext;
   }): ConversationGraphState {
     return {
       ...params.previousState,
@@ -235,6 +266,9 @@ export class GraphAgentService {
       priorQueries: [params.evidenceBundle.query, ...params.previousState.priorQueries],
       lastPlan: params.evidenceBundle.plan,
       selectedNodeIds: params.selectedNodeIds,
+      selectedEdgeIds: params.selectedEdgeIds,
+      visibleNodeIds: params.networkContext?.visibleNodeIds ?? params.previousState.visibleNodeIds,
+      visibleEdgeIds: params.networkContext?.visibleEdgeIds ?? params.previousState.visibleEdgeIds,
       updatedAt: new Date().toISOString(),
     };
   }
@@ -269,7 +303,7 @@ export class GraphAgentService {
 
   private buildNetworkSummaryBundle(
     query: string,
-    networkContext: NonNullable<GraphAgentChatRequestDto['networkContext']>,
+    networkContext: GraphNetworkContext,
   ): GraphEvidenceBundle {
     const plan: RetrievalPlanStep[] = [
       {
@@ -300,6 +334,7 @@ export class GraphAgentService {
           metadata: {
             totalNodes: networkContext.totalNodes,
             totalEdges: networkContext.totalEdges,
+            topNodeTypes: networkContext.topNodeTypes ?? [],
           },
         },
       ],
@@ -363,5 +398,77 @@ export class GraphAgentService {
     }
 
     return score;
+  }
+
+  private buildSelectedContextEntities(selectedNodeContext: GraphSelectionNodeContext[]) {
+    return selectedNodeContext
+      .filter((node) => node.id.trim().length > 0)
+      .map<ResolvedEntity>((node) => ({
+        id: node.id,
+        query: node.label,
+        displayName: node.label,
+        typeCode: node.nodeType ?? 'Entity',
+        typeName: node.nodeType ?? 'Entity',
+        confidence: 1,
+        matchedOn: ['selected-context'],
+        source: 'selected',
+      }));
+  }
+
+  private combineResolvedEntities(params: {
+    resolvedQueryEntities: ResolvedEntity[];
+    selectedEntities: ResolvedEntity[];
+    extractedQuery: ReturnType<EntityExtractionService['extractQuery']>;
+  }) {
+    const { resolvedQueryEntities, selectedEntities, extractedQuery } = params;
+    const shouldIncludeSelected =
+      selectedEntities.length > 0 &&
+      (extractedQuery.selectionReferences.length > 0 || extractedQuery.intent.operation === 'graph-expansion');
+
+    const merged = new Map<string, ResolvedEntity>();
+    const orderedEntities = shouldIncludeSelected
+      ? [...resolvedQueryEntities, ...selectedEntities]
+      : resolvedQueryEntities;
+
+    for (const entity of orderedEntities) {
+      const existing = merged.get(entity.id);
+      if (!existing || entity.confidence > existing.confidence) {
+        merged.set(entity.id, entity);
+      }
+    }
+
+    return [...merged.values()];
+  }
+
+  private buildSelectedEdgeContextEvidence(
+    selectedEdges: GraphSelectionEdgeContext[],
+    selectedNodes: GraphSelectionNodeContext[],
+    shouldInclude: boolean,
+  ): GraphEvidenceItem[] {
+    if (!shouldInclude || selectedEdges.length === 0) {
+      return [];
+    }
+
+    const nodeLabels = new Map(selectedNodes.map((node) => [node.id, node.label]));
+
+    return selectedEdges.slice(0, 8).map((edge, index) => {
+      const sourceLabel = nodeLabels.get(edge.source) ?? edge.source;
+      const targetLabel = nodeLabels.get(edge.target) ?? edge.target;
+      const relation = edge.relation?.trim() || 'CONNECTED_TO';
+
+      return {
+        id: `selected-edge-${edge.id}-${index}`,
+        kind: 'relation',
+        title: `Selected relationship: ${sourceLabel} ${relation} ${targetLabel}`,
+        summary: `This relationship is currently selected in the graph and was included as explicit graph context for the query.`,
+        score: 0.62,
+        nodeIds: [edge.source, edge.target],
+        edgeIds: [edge.id],
+        metadata: {
+          relation,
+          selectedContext: true,
+        },
+      };
+    });
   }
 }

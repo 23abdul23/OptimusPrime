@@ -12,6 +12,17 @@ export const GraphAgentChatRequestSchema = z.object({
       z.object({
         id: z.string(),
         label: z.string(),
+        nodeType: z.string().optional(),
+      }),
+    )
+    .optional(),
+  selectedEdgeContext: z
+    .array(
+      z.object({
+        id: z.string(),
+        source: z.string(),
+        target: z.string(),
+        relation: z.string().optional(),
       }),
     )
     .optional(),
@@ -20,6 +31,16 @@ export const GraphAgentChatRequestSchema = z.object({
       totalNodes: z.number().int().nonnegative(),
       totalEdges: z.number().int().nonnegative(),
       selectedNodeIds: z.array(z.string()).optional(),
+      visibleNodeIds: z.array(z.string()).optional(),
+      visibleEdgeIds: z.array(z.string()).optional(),
+      topNodeTypes: z
+        .array(
+          z.object({
+            type: z.string(),
+            count: z.number().int().nonnegative(),
+          }),
+        )
+        .optional(),
     })
     .optional(),
 });
