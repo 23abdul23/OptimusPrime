@@ -15,6 +15,7 @@ import React, { Suspense, useEffect } from 'react';
 import type Sigma from 'sigma';
 import { drawDiscNodeHover, EdgeArrowProgram, EdgeRectangleProgram } from 'sigma/rendering';
 import { DEFAULT_EDGE_COLOR } from '@/lib/data';
+import { normalizeGraphSelection } from '@/lib/graph/selection-context';
 import { useKGStore } from '@/lib/hooks';
 import NodeGradientProgram from '@/lib/graph/NodeGradientProgram';
 import type { EdgeAttributes, NodeAttributes } from '@/lib/interface';
@@ -50,7 +51,14 @@ export function KGGraphSigmaContainer(
 
   // Handle selection changes from the plugin
   const handleSelectionChange = React.useCallback((nodeIds: string[]) => {
-    useKGStore.setState({ selectedNodes: nodeIds });
+    const sigma = useKGStore.getState().sigmaInstance;
+    const graph = sigma?.getGraph();
+    if (!graph) {
+      useKGStore.getState().setGraphSelection({ nodeIds, edgeIds: [] });
+      return;
+    }
+
+    useKGStore.getState().setGraphSelection(normalizeGraphSelection(graph, { nodeIds }));
   }, []);
 
   useEffect(() => {

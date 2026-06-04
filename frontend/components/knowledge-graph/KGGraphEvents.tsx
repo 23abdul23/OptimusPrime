@@ -5,6 +5,7 @@ import type EventEmitter from 'events';
 import type Graph from 'graphology';
 import { useEffect, useRef, useState } from 'react';
 import { HIGHLIGHTED_EDGE_COLOR } from '@/lib/data';
+import { normalizeGraphSelection } from '@/lib/graph/selection-context';
 import { FADED_NODE_COLOR, generateTypeColorMap } from '@/lib/graph/knowledge-graph-renderer';
 import { useKGStore } from '@/lib/hooks';
 import type { EdgeAttributes, NodeAttributes } from '@/lib/interface';
@@ -104,11 +105,44 @@ export function KGGraphEvents({
   const activePropertyNodeTypes = useKGStore(state => state.activePropertyNodeTypes);
   const highlightNeighborNodes = useKGStore(state => state.highlightNeighborNodes);
   const nodeNameToIdTrie = useKGStore(state => state.nodeNameToIdTrie);
+  const inspectedNodeId = useKGStore(state => state.inspectedNodeId);
+  const inspectedEdgeId = useKGStore(state => state.inspectedEdgeId);
+  const selectedNodes = useKGStore(state => state.selectedNodes);
+  const selectedEdges = useKGStore(state => state.selectedEdges);
+  const setGraphSelection = useKGStore(state => state.setGraphSelection);
+  const setInspectedNodeId = useKGStore(state => state.setInspectedNodeId);
+  const setInspectedEdgeId = useKGStore(state => state.setInspectedEdgeId);
 
   const { gotoNode } = useCamera();
 
-  const syncSelectedNodes = (nodeIds: string[]) => {
-    useKGStore.setState({ selectedNodes: nodeIds });
+  const syncSelection = (nodeIds: string[], edgeIds: string[] = []) => {
+    const graph = sigma.getGraph();
+    const normalized = normalizeGraphSelection(graph, { nodeIds, edgeIds });
+    const previousEdgeIds = new Set(useKGStore.getState().selectedEdges);
+    const nextEdgeIds = new Set(normalized.edgeIds);
+
+    for (const edgeId of previousEdgeIds) {
+      if (nextEdgeIds.has(edgeId) || !graph.hasEdge(edgeId)) {
+        continue;
+      }
+      clearEdgeHighlight(
+        graph,
+        edgeId,
+        highlightedNodesRef.current,
+        clickedNodesRef.current,
+        activePropertyNodeTypes,
+      );
+    }
+
+    for (const edgeId of nextEdgeIds) {
+      if (previousEdgeIds.has(edgeId) || !graph.hasEdge(edgeId)) {
+        continue;
+      }
+      highlightEdge(graph, edgeId);
+    }
+
+    setGraphSelection(normalized);
+    return normalized;
   };
 
   // Helper: Clear clicked node state and restore visual state
@@ -125,13 +159,17 @@ export function KGGraphEvents({
     });
     restoreNodeType(graph, nodeId, highlightedNodesRef.current, clickedNodesRef.current, activePropertyNodeTypes);
     setClickedNode(null);
-    syncSelectedNodes([]);
+    setInspectedNodeId(null);
+    syncSelection([], []);
     sigma.refresh();
   };
 
-  const applyManualSelection = (nodeIds: string[]) => {
+  const applyManualSelection = (nodeIds: string[], edgeIds: string[] = []) => {
     const graph = sigma.getGraph();
-    const nextSelection = new Set(nodeIds.filter((nodeId) => graph.hasNode(nodeId) && !graph.getNodeAttribute(nodeId, 'hidden')));
+    const normalized = syncSelection(nodeIds, edgeIds);
+    const nextSelection = new Set(
+      normalized.nodeIds.filter((nodeId) => graph.hasNode(nodeId) && !graph.getNodeAttribute(nodeId, 'hidden')),
+    );
     const previousSelection = new Set(clickedNodesRef.current);
 
     for (const nodeId of previousSelection) {
@@ -152,7 +190,6 @@ export function KGGraphEvents({
       }));
     }
 
-    syncSelectedNodes(Array.from(nextSelection));
     sigma.refresh();
   };
 
@@ -217,6 +254,32 @@ export function KGGraphEvents({
     // Force sigma refresh to update nodeReducer with new highlighted nodes
     sigma.refresh();
   }, [nodeSearchQuery, sigma]);
+
+  useEffect(() => {
+    const graph = sigma.getGraph();
+    if (!inspectedNodeId || !graph.hasNode(inspectedNodeId)) {
+      return;
+    }
+
+    clickedEdgeRef.current = null;
+    setClickedEdge(null);
+    setClickedNode(inspectedNodeId);
+    const nextNodeIds = selectedNodes.includes(inspectedNodeId) ? selectedNodes : [...selectedNodes, inspectedNodeId];
+    applyManualSelection(nextNodeIds, selectedEdges);
+  }, [inspectedNodeId, selectedNodes, selectedEdges, sigma]);
+
+  useEffect(() => {
+    const graph = sigma.getGraph();
+    if (!inspectedEdgeId || !graph.hasEdge(inspectedEdgeId)) {
+      return;
+    }
+
+    setClickedNode(null);
+    clickedEdgeRef.current = inspectedEdgeId;
+    setClickedEdge(inspectedEdgeId);
+    const nextEdgeIds = selectedEdges.includes(inspectedEdgeId) ? selectedEdges : [...selectedEdges, inspectedEdgeId];
+    applyManualSelection(selectedNodes, nextEdgeIds);
+  }, [inspectedEdgeId, selectedNodes, selectedEdges, sigma]);
 
   // Register event handlers
   // biome-ignore lint/correctness/useExhaustiveDependencies: activePropertyNodeTypes read from store in callbacks
@@ -290,17 +353,6 @@ export function KGGraphEvents({
 
         if (draggedNode) {
           setDraggedNode(null);
-        } else if (clickedEdgeRef.current) {
-          clearEdgeHighlight(
-            graph,
-            clickedEdgeRef.current,
-            highlightedNodesRef.current,
-            clickedNodesRef.current,
-            activePropertyNodeTypes,
-          );
-          clickedEdgeRef.current = null;
-          setClickedEdge(null);
-          sigma.refresh();
         }
       },
 
@@ -316,21 +368,13 @@ export function KGGraphEvents({
           return;
         }
 
-        if (clickedNodesRef.current.size > 0) {
-          applyManualSelection([]);
-        }
-
-        if (clickedEdgeRef.current) {
-          clearEdgeHighlight(
-            graph,
-            clickedEdgeRef.current,
-            highlightedNodesRef.current,
-            clickedNodesRef.current,
-            activePropertyNodeTypes,
-          );
+        const currentSelection = useKGStore.getState();
+        if (clickedNodesRef.current.size > 0 || currentSelection.selectedEdges.length > 0) {
+          applyManualSelection([], []);
+          setInspectedNodeId(null);
+          setInspectedEdgeId(null);
           clickedEdgeRef.current = null;
           setClickedEdge(null);
-          sigma.refresh();
         }
       },
 
@@ -344,35 +388,30 @@ export function KGGraphEvents({
 
         const appendSelection = e.event.original.ctrlKey || e.event.original.metaKey;
 
-        if (clickedEdgeRef.current) {
-          clearEdgeHighlight(
-            graph,
-            clickedEdgeRef.current,
-            highlightedNodesRef.current,
-            clickedNodesRef.current,
-            activePropertyNodeTypes,
-          );
-          clickedEdgeRef.current = null;
-          setClickedEdge(null);
-        }
+        clickedEdgeRef.current = null;
+        setClickedEdge(null);
+        setInspectedEdgeId(null);
 
         if (appendSelection) {
           setClickedNode(null);
-          const currentSelection = useKGStore.getState().selectedNodes;
-          const nextSelection = currentSelection.includes(e.node)
-            ? currentSelection.filter((nodeId) => nodeId !== e.node)
-            : [...currentSelection, e.node];
-          applyManualSelection(nextSelection);
+          const { selectedNodes, selectedEdges } = useKGStore.getState();
+          const nextSelection = selectedNodes.includes(e.node)
+            ? selectedNodes.filter((nodeId) => nodeId !== e.node)
+            : [...selectedNodes, e.node];
+          applyManualSelection(nextSelection, selectedEdges);
+          setInspectedNodeId(e.node);
           return;
         }
 
         setClickedNode((prevNode) => {
           if (prevNode === e.node) {
-            applyManualSelection([]);
+            applyManualSelection([], []);
+            setInspectedNodeId(null);
             return null;
           }
 
-          applyManualSelection([e.node]);
+          applyManualSelection([e.node], []);
+          setInspectedNodeId(e.node);
 
           if (highlightNeighborNodes) {
             graph.forEachNeighbor(e.node, (neighbor, attr) => {
@@ -389,29 +428,34 @@ export function KGGraphEvents({
       // Edge click - show popup with source, edge, and target properties
       clickEdge: e => {
         setClickedNode(null);
-        if (clickedEdgeRef.current && clickedEdgeRef.current !== e.edge) {
-          clearEdgeHighlight(
-            graph,
-            clickedEdgeRef.current,
-            highlightedNodesRef.current,
-            clickedNodesRef.current,
-            activePropertyNodeTypes,
-          );
-        }
-        if (clickedEdgeRef.current === e.edge) {
-          clearEdgeHighlight(
-            graph,
-            e.edge,
-            highlightedNodesRef.current,
-            clickedNodesRef.current,
-            activePropertyNodeTypes,
-          );
+        setInspectedNodeId(null);
+        const appendSelection = e.event.original.ctrlKey || e.event.original.metaKey;
+        const { selectedNodes, selectedEdges } = useKGStore.getState();
+
+        if (appendSelection) {
+          const nextEdges = selectedEdges.includes(e.edge)
+            ? selectedEdges.filter((edgeId) => edgeId !== e.edge)
+            : [...selectedEdges, e.edge];
+          applyManualSelection(selectedNodes, nextEdges);
+          if (nextEdges.includes(e.edge)) {
+            clickedEdgeRef.current = e.edge;
+            setClickedEdge(e.edge);
+            setInspectedEdgeId(e.edge);
+          } else {
+            clickedEdgeRef.current = null;
+            setClickedEdge(null);
+            setInspectedEdgeId(null);
+          }
+        } else if (clickedEdgeRef.current === e.edge) {
+          applyManualSelection([], []);
           clickedEdgeRef.current = null;
           setClickedEdge(null);
+          setInspectedEdgeId(null);
         } else {
-          highlightEdge(graph, e.edge);
+          applyManualSelection([], [e.edge]);
           clickedEdgeRef.current = e.edge;
           setClickedEdge(e.edge);
+          setInspectedEdgeId(e.edge);
         }
       },
     });
@@ -447,24 +491,24 @@ export function KGGraphEvents({
   return (
     <>
       {clickedNode && nodePopupData && (
-        <KGPopupTable type='node' nodeData={nodePopupData} onClose={() => clearClickedNode(clickedNode)} />
+        <KGPopupTable
+          type='node'
+          nodeData={nodePopupData}
+          onClose={() => {
+            clearClickedNode(clickedNode);
+            setInspectedNodeId(null);
+          }}
+        />
       )}
       {clickedEdge && edgePopupData && (
         <KGPopupTable
           type='edge'
           edgeData={edgePopupData}
           onClose={() => {
-            if (clickedEdgeRef.current) {
-              clearEdgeHighlight(
-                graph,
-                clickedEdgeRef.current,
-                highlightedNodesRef.current,
-                clickedNodesRef.current,
-                activePropertyNodeTypes,
-              );
-              clickedEdgeRef.current = null;
-            }
+            applyManualSelection([], []);
+            clickedEdgeRef.current = null;
             setClickedEdge(null);
+            setInspectedEdgeId(null);
           }}
         />
       )}

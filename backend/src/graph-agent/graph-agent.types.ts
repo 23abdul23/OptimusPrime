@@ -152,8 +152,10 @@ export interface GraphNetworkContext {
   totalNodes: number;
   totalEdges: number;
   selectedNodeIds?: string[];
+  selectedEdgeIds?: string[];
   visibleNodeIds?: string[];
   visibleEdgeIds?: string[];
+  visibleNodeContext?: GraphSelectionNodeContext[];
   topNodeTypes?: Array<{
     type: string;
     count: number;
@@ -172,6 +174,9 @@ export interface GraphContextResult {
   activeAnchors: GraphSelectionNodeContext[];
   selectedNodes: GraphSelectionNodeContext[];
   selectedEdges: GraphSelectionEdgeContext[];
+  visibleNodes: GraphSelectionNodeContext[];
+  visibleNodeIds: string[];
+  visibleEdgeIds: string[];
   graphScope: GraphScope;
   graphReferences: GraphReferenceResolution;
   selectedNodeTypes: string[];

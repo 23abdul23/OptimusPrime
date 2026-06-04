@@ -69,6 +69,21 @@ export interface KGStore {
   selectedNodes: string[];
 
   /**
+   * Selected edge IDs in the graph
+   */
+  selectedEdges: string[];
+
+  /**
+   * Node currently opened in the details panel
+   */
+  inspectedNodeId: string | null;
+
+  /**
+   * Edge currently opened in the details panel
+   */
+  inspectedEdgeId: string | null;
+
+  /**
    * Active OptimusKG query controls so other UI surfaces can reuse the same expansion settings
    */
   optimusQueryOptions: {
@@ -120,6 +135,21 @@ export interface KGStore {
    * Set Network Statistics
    */
   setNetworkStatistics: (stats: Partial<KGStore['networkStatistics']>) => void;
+
+  /**
+   * Update graph selection in one place so node and edge selection stay consistent
+   */
+  setGraphSelection: (selection: { nodeIds: string[]; edgeIds: string[] }) => void;
+
+  /**
+   * Update the currently inspected node
+   */
+  setInspectedNodeId: (nodeId: string | null) => void;
+
+  /**
+   * Update the currently inspected edge
+   */
+  setInspectedEdgeId: (edgeId: string | null) => void;
 
   /**
    * Flag to track if statistics have been computed
@@ -200,6 +230,9 @@ export const useKGStore = create<KGStore>(set => ({
   defaultLabelDensity: 1.5,
   defaultLabelSize: 8,
   selectedNodes: [],
+  selectedEdges: [],
+  inspectedNodeId: null,
+  inspectedEdgeId: null,
   optimusQueryOptions: {
     radius: 1,
     maxNodes: 250,
@@ -232,6 +265,18 @@ export const useKGStore = create<KGStore>(set => ({
         ...stats,
       },
     }));
+  },
+  setGraphSelection: selection => {
+    set({
+      selectedNodes: selection.nodeIds,
+      selectedEdges: selection.edgeIds,
+    });
+  },
+  setInspectedNodeId: nodeId => {
+    set({ inspectedNodeId: nodeId, inspectedEdgeId: null });
+  },
+  setInspectedEdgeId: edgeId => {
+    set({ inspectedEdgeId: edgeId, inspectedNodeId: null });
   },
   statisticsComputed: false,
   radialAnalysis: {

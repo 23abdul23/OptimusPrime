@@ -247,8 +247,8 @@ export function NodeTypeLegend() {
     if (currentGraph.hasNode(result.id)) {
       useKGStore.setState({
         nodeSearchQuery: result.id,
-        selectedNodes: [result.id],
       });
+      useKGStore.getState().setGraphSelection({ nodeIds: [result.id], edgeIds: [] });
       sigmaInstance.refresh();
       setDialogOpen(false);
       setSearchQuery('');
@@ -265,8 +265,8 @@ export function NodeTypeLegend() {
       await applyOptimusGraph(sigmaInstance, payload, 'replace', [result.id]);
       useKGStore.setState({
         nodeSearchQuery: result.id,
-        selectedNodes: [result.id],
       });
+      useKGStore.getState().setGraphSelection({ nodeIds: [result.id], edgeIds: [] });
       setDialogOpen(false);
       setSearchQuery('');
       setSearchResults([]);

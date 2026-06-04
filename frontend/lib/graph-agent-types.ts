@@ -29,8 +29,10 @@ export interface GraphNetworkContext {
   totalNodes: number;
   totalEdges: number;
   selectedNodeIds?: string[];
+  selectedEdgeIds?: string[];
   visibleNodeIds?: string[];
   visibleEdgeIds?: string[];
+  visibleNodeContext?: GraphSelectionNodeContext[];
   topNodeTypes?: Array<{
     type: string;
     count: number;

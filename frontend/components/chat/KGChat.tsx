@@ -2,7 +2,7 @@
 
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
-import { BookmarkIcon, BugIcon, CheckIcon, RefreshCcwIcon } from 'lucide-react';
+import { BookmarkIcon, BugIcon, CheckIcon, ChevronDownIcon, LightbulbIcon, Loader2Icon, RefreshCcwIcon } from 'lucide-react';
 import React from 'react';
 import { toast } from 'sonner';
 import { LLM_MODELS } from '@/lib/data';
@@ -19,8 +19,10 @@ import { useKGStore } from '@/lib/hooks/use-kg-store';
 import { generateSessionId, getUserId } from '@/lib/langfuse-tracking';
 import {
   applyOptimusGraph,
+  clearPreviewOptimusNode,
   focusOptimusNodes,
   highlightOptimusPath,
+  previewOptimusNode,
 } from '@/lib/optimuskg';
 import { cn, envURL } from '@/lib/utils';
 import { Checkpoint, CheckpointIcon, CheckpointTrigger } from '../ai-elements/checkpoint';
@@ -66,8 +68,10 @@ import {
   PromptInputSubmit,
   PromptInputTextarea,
   PromptInputTools,
+  usePromptInputController,
 } from '../ai-elements/prompt-input';
 import { Reasoning, ReasoningContent, ReasoningTrigger } from '../ai-elements/reasoning';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../ui/collapsible';
 
 type CheckpointType = {
   id: string;
@@ -248,6 +252,301 @@ function GraphActionsPanel({ actions }: { actions: GraphAction[] }) {
   );
 }
 
+type GraphEntityCandidate = {
+  id: string;
+  label: string;
+  nodeType?: string;
+};
+
+function PromptInputValueSync({
+  value,
+}: {
+  value: string;
+}) {
+  const controller = usePromptInputController();
+
+  React.useEffect(() => {
+    if (controller.textInput.value !== value) {
+      controller.textInput.setInput(value);
+    }
+  }, [controller, value]);
+
+  return null;
+}
+
+function collectGraphCandidates(
+  message: GraphAgentUIMessage,
+  sigmaInstance: ReturnType<typeof useKGStore.getState>['sigmaInstance'],
+) {
+  const graph = sigmaInstance?.getGraph();
+  const evidencePart = message.parts.find((part): part is GraphEvidencePart => isGraphEvidencePart(part));
+  const candidates = new Map<string, GraphEntityCandidate>();
+
+  for (const entity of evidencePart?.data.resolvedEntities ?? []) {
+    candidates.set(entity.id, {
+      id: entity.id,
+      label: entity.displayName,
+      nodeType: entity.typeName,
+    });
+  }
+
+  if (graph && evidencePart) {
+    for (const item of evidencePart.data.items) {
+      for (const nodeId of item.nodeIds) {
+        if (!graph.hasNode(nodeId)) {
+          continue;
+        }
+        candidates.set(nodeId, {
+          id: nodeId,
+          label: String(graph.getNodeAttribute(nodeId, 'label') ?? nodeId),
+          nodeType:
+            String(graph.getNodeAttribute(nodeId, 'nodeType') ?? graph.getNodeAttribute(nodeId, 'typeCode') ?? '') ||
+            undefined,
+        });
+      }
+    }
+  }
+
+  if (graph) {
+    for (const nodeId of graph.nodes()) {
+      if (graph.getNodeAttribute(nodeId, 'hidden') === true) {
+        continue;
+      }
+
+      const label = String(graph.getNodeAttribute(nodeId, 'label') ?? nodeId).trim();
+      if (label.length < 3) {
+        continue;
+      }
+
+      candidates.set(nodeId, {
+        id: nodeId,
+        label,
+        nodeType:
+          String(graph.getNodeAttribute(nodeId, 'nodeType') ?? graph.getNodeAttribute(nodeId, 'typeCode') ?? '') ||
+          undefined,
+      });
+    }
+  }
+
+  return [...candidates.values()]
+    .filter((candidate) => candidate.label.trim().length >= 3)
+    .sort((a, b) => b.label.length - a.label.length || a.label.localeCompare(b.label))
+    .slice(0, 600);
+}
+
+function tokenizeGraphAwareText(text: string, candidates: GraphEntityCandidate[]) {
+  const parts: Array<{ type: 'text'; value: string } | { type: 'entity'; candidate: GraphEntityCandidate }> = [];
+  let cursor = 0;
+  const lowerText = text.toLowerCase();
+
+  while (cursor < text.length) {
+    let bestMatch:
+      | {
+          start: number;
+          end: number;
+          candidate: GraphEntityCandidate;
+        }
+      | undefined;
+
+    for (const candidate of candidates) {
+      const index = lowerText.indexOf(candidate.label.toLowerCase(), cursor);
+      if (index === -1) {
+        continue;
+      }
+
+      if (
+        !bestMatch ||
+        index < bestMatch.start ||
+        (index === bestMatch.start && candidate.label.length > bestMatch.candidate.label.length)
+      ) {
+        bestMatch = {
+          start: index,
+          end: index + candidate.label.length,
+          candidate,
+        };
+      }
+    }
+
+    if (!bestMatch) {
+      parts.push({ type: 'text', value: text.slice(cursor) });
+      break;
+    }
+
+    if (bestMatch.start > cursor) {
+      parts.push({ type: 'text', value: text.slice(cursor, bestMatch.start) });
+    }
+
+    parts.push({ type: 'entity', candidate: bestMatch.candidate });
+    cursor = bestMatch.end;
+  }
+
+  return parts;
+}
+
+function GraphAwareText({
+  text,
+  message,
+  sigmaInstance,
+}: {
+  text: string;
+  message: GraphAgentUIMessage;
+  sigmaInstance: ReturnType<typeof useKGStore.getState>['sigmaInstance'];
+}) {
+  const candidates = React.useMemo(() => collectGraphCandidates(message, sigmaInstance), [message, sigmaInstance]);
+  const tokenized = React.useMemo(() => tokenizeGraphAwareText(text, candidates), [text, candidates]);
+
+  if (candidates.length === 0) {
+    return <MessageResponse isAnimating={false}>{text}</MessageResponse>;
+  }
+
+  return (
+    <div className='whitespace-pre-wrap'>
+      {tokenized.map((part, index) =>
+        part.type === 'text' ? (
+          <React.Fragment key={`text-${index}`}>{part.value}</React.Fragment>
+        ) : (
+          <button
+            key={`entity-${part.candidate.id}-${index}`}
+            type='button'
+            className='inline rounded bg-sky-100 px-1 py-0.5 font-medium text-sky-900 underline-offset-2 hover:bg-sky-200 hover:underline'
+            onMouseEnter={() => {
+              if (!sigmaInstance) return;
+              previewOptimusNode(sigmaInstance, part.candidate.id);
+            }}
+            onMouseLeave={() => {
+              if (!sigmaInstance) return;
+              clearPreviewOptimusNode(sigmaInstance, part.candidate.id);
+            }}
+            onClick={() => {
+              if (!sigmaInstance) return;
+              useKGStore.getState().setGraphSelection({ nodeIds: [part.candidate.id], edgeIds: [] });
+              useKGStore.getState().setInspectedNodeId(part.candidate.id);
+              focusOptimusNodes(sigmaInstance, [part.candidate.id]);
+            }}
+          >
+            {part.candidate.label}
+          </button>
+        ),
+      )}
+    </div>
+  );
+}
+
+function buildFollowUpSuggestions(params: {
+  message: GraphAgentUIMessage;
+  previousQueries: string[];
+  liveContext: {
+    selectedNodeContext: GraphSelectionNodeContext[];
+    selectedEdgeContext: GraphSelectionEdgeContext[];
+    networkContext?: GraphNetworkContext;
+  };
+}) {
+  const evidencePart = params.message.parts.find((part): part is GraphEvidencePart => isGraphEvidencePart(part));
+  if (!evidencePart) {
+    return [];
+  }
+
+  const { bundle } = { bundle: evidencePart.data };
+  const resolvedTypes = new Set(bundle.resolvedEntities.map((entity) => entity.typeName.toLowerCase()));
+  const planOps = new Set(bundle.plan.map((step) => step.operation));
+  const suggestions: string[] = [];
+
+  if (params.liveContext.selectedNodeContext.length > 1) {
+    suggestions.push('What pathways involve these selected nodes?');
+    suggestions.push('What do these selected nodes have in common?');
+  }
+  if ([...resolvedTypes].some((type) => /gene|protein/.test(type))) {
+    suggestions.push('Which approved drugs target these proteins?');
+    suggestions.push('What diseases are associated with these genes?');
+  }
+  if ([...resolvedTypes].some((type) => /disease|phenotype|syndrome|disorder/.test(type))) {
+    suggestions.push('Which genes are most central to this disease module?');
+    suggestions.push('What pathways connect these disease-linked entities?');
+  }
+  if (planOps.has('summarize-selected-nodes') || planOps.has('summarize-visible-subgraph')) {
+    suggestions.push('Which nodes are the main hubs in this graph?');
+    suggestions.push('What biological relationships dominate this network?');
+  }
+  if (planOps.has('compare-nodes') || planOps.has('find-shared-pathways')) {
+    suggestions.push('Which diseases share these biomarkers?');
+  }
+
+  return suggestions.filter((suggestion, index, all) => {
+    const normalized = suggestion.trim().toLowerCase();
+    return (
+      normalized.length > 0 &&
+      all.findIndex((candidate) => candidate.trim().toLowerCase() === normalized) === index &&
+      !params.previousQueries.some((query) => query.trim().toLowerCase() === normalized)
+    );
+  }).slice(0, 3);
+}
+
+function ReasoningEvidenceDisclosure(props: {
+  message: GraphAgentUIMessage;
+  evidence: GraphEvidenceBundle | null;
+  actions: GraphAction[];
+  reasoningParts: string[];
+}) {
+  const { evidence, actions, reasoningParts } = props;
+  if (!evidence && actions.length === 0 && reasoningParts.length === 0) {
+    return null;
+  }
+
+  return (
+    <Collapsible className='mt-2 ml-10 rounded-lg border border-slate-200 bg-white shadow-sm'>
+      <CollapsibleTrigger className='flex w-full items-center justify-between px-3 py-2 text-left text-slate-700 text-sm'>
+        <span className='font-medium'>Show Reasoning &amp; Evidence</span>
+        <ChevronDownIcon className='size-4' />
+      </CollapsibleTrigger>
+      <CollapsibleContent className='border-t bg-slate-50 px-2 py-2'>
+        {reasoningParts.length > 0 && (
+          <div className='mb-2 rounded-md border border-slate-200 bg-white p-2'>
+            <div className='mb-1 font-semibold text-slate-900 text-sm'>Reasoning</div>
+            {reasoningParts.map((reasoning, index) => (
+              <Reasoning key={`reasoning-${index}`} className='w-full'>
+                <ReasoningTrigger />
+                <ReasoningContent className='rounded-md border p-2 text-black'>{reasoning}</ReasoningContent>
+              </Reasoning>
+            ))}
+          </div>
+        )}
+        {evidence && <GraphEvidencePanel bundle={evidence} />}
+        {actions.length > 0 && <GraphActionsPanel actions={actions} />}
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+function FollowUpSuggestions(props: {
+  suggestions: string[];
+  onPick: (suggestion: string) => void;
+}) {
+  if (props.suggestions.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className='mt-2 ml-10 rounded-lg border border-slate-200 bg-white p-3 shadow-sm'>
+      <div className='mb-2 flex items-center gap-2 font-semibold text-slate-900 text-sm'>
+        <LightbulbIcon className='size-4 text-amber-500' />
+        Suggested Follow-Up Questions
+      </div>
+      <div className='flex flex-wrap gap-2'>
+        {props.suggestions.map((suggestion) => (
+          <button
+            key={suggestion}
+            type='button'
+            className='rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-sky-900 text-sm hover:bg-sky-100'
+            onClick={() => props.onPick(suggestion)}
+          >
+            {suggestion}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function DebugSection({
   title,
   value,
@@ -415,6 +714,7 @@ function GraphAgentDebugPanel(props: {
 
 function buildGraphAgentContext(
   selectedNodes: string[],
+  selectedEdges: string[],
   sigmaInstance: ReturnType<typeof useKGStore.getState>['sigmaInstance'],
 ) {
   const graph = sigmaInstance?.getGraph();
@@ -425,36 +725,39 @@ function buildGraphAgentContext(
       undefined;
     return { id: nodeId, label, nodeType };
   });
-  const selectedNodeSet = new Set(selectedNodes);
-  const selectedEdgeContext: GraphSelectionEdgeContext[] = [];
-
-  if (graph && selectedNodeSet.size > 1) {
-    graph.forEachEdge((edgeId, attributes, source, target) => {
-      if (!selectedNodeSet.has(source) || !selectedNodeSet.has(target) || selectedEdgeContext.length >= 64) {
-        return;
-      }
-
-      selectedEdgeContext.push({
-        id: edgeId,
-        source,
-        target,
-        relation:
-          typeof attributes.relation === 'string'
-            ? attributes.relation
-            : typeof attributes.label === 'string'
-              ? attributes.label
-              : undefined,
-      });
-    });
-  }
+  const selectedEdgeContext: GraphSelectionEdgeContext[] = (graph ? selectedEdges : [])
+    .filter((edgeId) => graph?.hasEdge(edgeId))
+    .slice(0, 128)
+    .map((edgeId) => ({
+      id: edgeId,
+      source: graph!.source(edgeId),
+      target: graph!.target(edgeId),
+      relation:
+        typeof graph!.getEdgeAttribute(edgeId, 'relation') === 'string'
+          ? graph!.getEdgeAttribute(edgeId, 'relation')
+          : typeof graph!.getEdgeAttribute(edgeId, 'label') === 'string'
+            ? graph!.getEdgeAttribute(edgeId, 'label')
+            : undefined,
+    }));
 
   const networkContext: GraphNetworkContext | undefined = graph
     ? {
         totalNodes: graph.order,
         totalEdges: graph.size,
         selectedNodeIds: selectedNodes,
+        selectedEdgeIds: selectedEdges,
         visibleNodeIds: graph.nodes().slice(0, 160),
         visibleEdgeIds: graph.edges().slice(0, 320),
+        visibleNodeContext: graph
+          .nodes()
+          .slice(0, 160)
+          .map((nodeId) => ({
+            id: nodeId,
+            label: String(graph.getNodeAttribute(nodeId, 'label') ?? nodeId),
+            nodeType:
+              String(graph.getNodeAttribute(nodeId, 'nodeType') ?? graph.getNodeAttribute(nodeId, 'typeCode') ?? '') ||
+              undefined,
+          })),
         topNodeTypes: (() => {
           const counts = new Map<string, number>();
           graph.forEachNode((nodeId) => {
@@ -483,16 +786,18 @@ export function KGChat({ onChatOpen, children }: KGChatProps) {
   const [model, setModel] = React.useState<(typeof LLM_MODELS)[number]['id']>(LLM_MODELS[0].id);
   const [modelSelectorOpen, setModelSelectorOpen] = React.useState(false);
   const [checkpoints, setCheckpoints] = React.useState<CheckpointType[]>([]);
+  const [draftText, setDraftText] = React.useState('');
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const processedActionIds = React.useRef<Set<string>>(new Set());
   const sigmaInstance = useKGStore((state) => state.sigmaInstance);
   const selectedNodes = useKGStore((state) => state.selectedNodes);
+  const selectedEdges = useKGStore((state) => state.selectedEdges);
   const [lastDebugPayload, setLastDebugPayload] = React.useState<GraphAgentDebugPayload | null>(null);
 
   const sessionId = React.useMemo(() => generateSessionId(), []);
   const liveContext = React.useMemo(
-    () => buildGraphAgentContext(selectedNodes, sigmaInstance),
-    [selectedNodes, sigmaInstance],
+    () => buildGraphAgentContext(selectedNodes, selectedEdges, sigmaInstance),
+    [selectedNodes, selectedEdges, sigmaInstance],
   );
 
   const { messages, setMessages, sendMessage, status, regenerate, stop, clearError } = useChat<GraphAgentUIMessage>({
@@ -534,6 +839,15 @@ export function KGChat({ onChatOpen, children }: KGChatProps) {
     }
     return null;
   }, [messages]);
+
+  const handleSuggestionPick = React.useCallback((suggestion: string) => {
+    setDraftText(suggestion);
+    onChatOpen?.(true);
+    window.setTimeout(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(suggestion.length, suggestion.length);
+    }, 0);
+  }, [onChatOpen]);
 
   React.useEffect(() => {
     if (!sigmaInstance) {
@@ -633,6 +947,7 @@ export function KGChat({ onChatOpen, children }: KGChatProps) {
         },
       },
     );
+    setDraftText('');
   };
 
   const handleDeleteMessages = () => {
@@ -657,6 +972,33 @@ export function KGChat({ onChatOpen, children }: KGChatProps) {
         {messages.map((message, messageIndex) => {
           const checkpoint = checkpoints.find((cp) => cp.messageIndex === messageIndex);
           const hasAttachments = message.parts.some((part) => part.type === 'file');
+          const hasTextPart = message.parts.some((part) => part.type === 'text');
+          const evidencePart = message.parts.find((part): part is GraphEvidencePart => isGraphEvidencePart(part)) ?? null;
+          const actionsPart = message.parts.find((part): part is GraphActionsPart => isGraphActionsPart(part)) ?? null;
+          const reasoningParts = message.parts
+            .filter((part): part is Extract<GraphAgentPart, { type: 'reasoning' }> => part.type === 'reasoning')
+            .map((part) => part.text);
+          const previousQueries = messages
+            .slice(0, messageIndex)
+            .filter((candidate) => candidate.role === 'user')
+            .flatMap((candidate) =>
+              candidate.parts
+                .filter((part): part is Extract<GraphAgentPart, { type: 'text' }> => part.type === 'text')
+                .map((part) => part.text),
+            );
+          const suggestions =
+            message.role === 'assistant'
+              ? buildFollowUpSuggestions({
+                  message,
+                  previousQueries,
+                  liveContext,
+                })
+              : [];
+          const isAssistantDataOnlyMessage = message.role === 'assistant' && !hasTextPart && !hasAttachments;
+
+          if (isAssistantDataOnlyMessage) {
+            return null;
+          }
 
           return (
             <React.Fragment key={message.id}>
@@ -678,9 +1020,11 @@ export function KGChat({ onChatOpen, children }: KGChatProps) {
                         <React.Fragment key={`${message.id}-${i}`}>
                           <Message from={message.role}>
                             <MessageContent className='shadow-md'>
-                              <MessageResponse isAnimating={status === 'submitted' && message.role === 'assistant'}>
-                                {part.text}
-                              </MessageResponse>
+                              {message.role === 'assistant' ? (
+                                <GraphAwareText text={part.text} message={message} sigmaInstance={sigmaInstance} />
+                              ) : (
+                                <MessageResponse isAnimating={status === 'submitted'}>{part.text}</MessageResponse>
+                              )}
                             </MessageContent>
                             <MessageAvatar
                               className={cn('shadow', message.role === 'assistant' && 'p-1')}
@@ -710,32 +1054,13 @@ export function KGChat({ onChatOpen, children }: KGChatProps) {
                         </React.Fragment>
                       );
                     case 'reasoning':
-                      return (
-                        <Reasoning
-                          key={`${message.id}-${i}`}
-                          className='w-full'
-                          isStreaming={
-                            status === 'streaming' &&
-                            i === message.parts.length - 1 &&
-                            message.id === messages.at(-1)?.id
-                          }
-                        >
-                          <ReasoningTrigger />
-                          <ReasoningContent className='rounded-md border p-2 text-black'>{part.text}</ReasoningContent>
-                        </Reasoning>
-                      );
+                      return null;
                     case 'file':
                       return null;
                     case 'data-graphEvidence':
-                      if (!isGraphEvidencePart(part)) {
-                        return null;
-                      }
-                      return <GraphEvidencePanel key={`${message.id}-${i}`} bundle={part.data} />;
+                      return null;
                     case 'data-graphActions':
-                      if (!isGraphActionsPart(part)) {
-                        return null;
-                      }
-                      return <GraphActionsPanel key={`${message.id}-${i}`} actions={part.data} />;
+                      return null;
                     case 'data-graphState':
                       if (!isGraphStatePart(part)) {
                         return null;
@@ -749,6 +1074,17 @@ export function KGChat({ onChatOpen, children }: KGChatProps) {
                       return null;
                   }
                 })}
+                {message.role === 'assistant' && (
+                  <>
+                    <ReasoningEvidenceDisclosure
+                      message={message}
+                      evidence={evidencePart?.data ?? null}
+                      actions={actionsPart?.data ?? []}
+                      reasoningParts={reasoningParts}
+                    />
+                    <FollowUpSuggestions suggestions={suggestions} onPick={handleSuggestionPick} />
+                  </>
+                )}
               </div>
 
               {checkpoint && (
@@ -762,6 +1098,28 @@ export function KGChat({ onChatOpen, children }: KGChatProps) {
             </React.Fragment>
           );
         })}
+        {(status === 'submitted' || status === 'streaming') &&
+          (() => {
+            const lastMessage = messages.at(-1);
+            const lastAssistantHasText =
+              lastMessage?.role === 'assistant' && lastMessage.parts.some((part) => part.type === 'text');
+
+            if (lastAssistantHasText) {
+              return null;
+            }
+
+            return (
+              <Message from='assistant'>
+                <MessageContent className='shadow-md'>
+                  <div className='flex items-center gap-2 text-slate-600 text-sm'>
+                    <Loader2Icon className='size-4 animate-spin' />
+                    <span>Thinking over the graph context...</span>
+                  </div>
+                </MessageContent>
+                <MessageAvatar className='p-1 shadow' src='/image/logo.svg' name='AI' />
+              </Message>
+            );
+          })()}
         {alert?.show && alert.component}
       </ConversationContent>
       <ConversationScrollButton />
@@ -773,10 +1131,15 @@ export function KGChat({ onChatOpen, children }: KGChatProps) {
 
     return (
       <PromptInputProvider>
+        <PromptInputValueSync value={draftText} />
         <PromptInput globalDrop multiple onSubmit={handleSubmit} className='mx-2'>
           <PromptInputAttachments>{(attachment) => <PromptInputAttachment data={attachment} />}</PromptInputAttachments>
           <PromptInputBody>
-            <PromptInputTextarea ref={textareaRef} disabled={status === 'error'} />
+            <PromptInputTextarea
+              ref={textareaRef}
+              disabled={status === 'error'}
+              onChange={(event) => setDraftText(event.target.value)}
+            />
           </PromptInputBody>
           <PromptInputFooter>
             <PromptInputTools>

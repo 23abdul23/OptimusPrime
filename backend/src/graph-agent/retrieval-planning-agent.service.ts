@@ -102,7 +102,11 @@ export class RetrievalPlanningAgentService {
         ];
       }
 
-      if (graphContext.graphScope.mode === 'visible-subgraph' || state.visibleNodeIds.length > 0) {
+      if (
+        graphContext.graphScope.mode === 'visible-subgraph' ||
+        graphContext.visibleNodeIds.length > 0 ||
+        state.visibleNodeIds.length > 0
+      ) {
         return [
           this.createStep({
             prefix: 'subgraph-summary',
@@ -112,8 +116,8 @@ export class RetrievalPlanningAgentService {
             tool: 'summarizeSubgraph',
             description: 'Summarize the currently visible subgraph.',
             params: {
-              nodeIds: state.visibleNodeIds.slice(0, 120),
-              edgeIds: state.visibleEdgeIds.slice(0, 240),
+              nodeIds: (graphContext.visibleNodeIds.length > 0 ? graphContext.visibleNodeIds : state.visibleNodeIds).slice(0, 120),
+              edgeIds: (graphContext.visibleEdgeIds.length > 0 ? graphContext.visibleEdgeIds : state.visibleEdgeIds).slice(0, 240),
             },
           }),
         ];

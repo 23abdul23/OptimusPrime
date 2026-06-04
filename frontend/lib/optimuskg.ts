@@ -1,6 +1,7 @@
 import type EventEmitter from 'events';
 import type Graph from 'graphology';
 import type Sigma from 'sigma';
+import { fitViewportToNodes } from '@sigma/utils';
 import { applyKnowledgeGraphStyling, kgStatisticsGenerator } from '@/lib/graph';
 import { useKGStore, useStore } from '@/lib/hooks';
 import { NETWORK_STORAGE_KEYS } from '@/lib/interface/knowledge-graph';
@@ -65,6 +66,8 @@ export interface OptimusGraphStats {
 
 const OPTIMUS_PATH_NODE_COLOR = '#f97316';
 const OPTIMUS_PATH_EDGE_COLOR = '#ea580c';
+const OPTIMUS_PREVIEW_NODE_COLOR = '#0ea5e9';
+const OPTIMUS_PREVIEW_BORDER_COLOR = '#0369a1';
 const VALID_NODE_TYPES = new Set<NodeAttributes['type']>(['circle', 'border', 'highlight', 'normal']);
 
 function apiBaseUrl() {
@@ -190,6 +193,82 @@ export function focusOptimusNodes(
   focusCameraOnNodes(sigma, sigma.getGraph(), nodeIds);
 }
 
+export function resetOptimusViewport(sigma: Sigma<NodeAttributes, EdgeAttributes>) {
+  const graph = sigma.getGraph();
+  const visibleNodes = graph.filterNodes((_node, attr) => !attr.hidden);
+  if (visibleNodes.length === 0) {
+    return;
+  }
+
+  fitViewportToNodes(sigma, visibleNodes, { animate: true });
+}
+
+export function previewOptimusNode(
+  sigma: Sigma<NodeAttributes, EdgeAttributes>,
+  nodeId: string,
+) {
+  const graph = sigma.getGraph();
+  if (!graph.hasNode(nodeId)) {
+    return;
+  }
+
+  graph.updateNodeAttributes(nodeId, (attrs) => ({
+    ...attrs,
+    previewHighlighted: true,
+    previewOriginalColor:
+      typeof attrs.previewOriginalColor === 'string' ? attrs.previewOriginalColor : attrs.color,
+    previewOriginalBorderColor:
+      typeof attrs.previewOriginalBorderColor === 'string' ? attrs.previewOriginalBorderColor : attrs.borderColor,
+    previewOriginalBorderSize:
+      typeof attrs.previewOriginalBorderSize === 'number' ? attrs.previewOriginalBorderSize : attrs.borderSize,
+    previewOriginalType:
+      typeof attrs.previewOriginalType === 'string' ? attrs.previewOriginalType : attrs.type,
+    color: OPTIMUS_PREVIEW_NODE_COLOR,
+    borderColor: OPTIMUS_PREVIEW_BORDER_COLOR,
+    borderSize: Math.max(Number(attrs.borderSize ?? 0.15), 0.22),
+    type: 'border',
+    highlighted: true,
+    zIndex: Math.max(Number(attrs.zIndex ?? 0), 180),
+  }));
+
+  sigma.refresh();
+}
+
+export function clearPreviewOptimusNode(
+  sigma: Sigma<NodeAttributes, EdgeAttributes>,
+  nodeId: string,
+) {
+  const graph = sigma.getGraph();
+  if (!graph.hasNode(nodeId)) {
+    return;
+  }
+
+  graph.updateNodeAttributes(nodeId, (attrs) => ({
+    ...attrs,
+    color:
+      typeof attrs.previewOriginalColor === 'string' ? attrs.previewOriginalColor : attrs.color,
+    borderColor:
+      typeof attrs.previewOriginalBorderColor === 'string'
+        ? attrs.previewOriginalBorderColor
+        : attrs.borderColor,
+    borderSize:
+      typeof attrs.previewOriginalBorderSize === 'number'
+        ? attrs.previewOriginalBorderSize
+        : attrs.borderSize,
+    type:
+      typeof attrs.previewOriginalType === 'string'
+        ? (attrs.previewOriginalType as NodeAttributes['type'])
+        : attrs.type,
+    previewHighlighted: undefined,
+    previewOriginalColor: undefined,
+    previewOriginalBorderColor: undefined,
+    previewOriginalBorderSize: undefined,
+    previewOriginalType: undefined,
+  }));
+
+  sigma.refresh();
+}
+
 function mergeEdge(
   graph: Graph<NodeAttributes, EdgeAttributes>,
   key: string,
@@ -226,6 +305,9 @@ function resetKnowledgeGraphState() {
     nodePropertyData: {},
     kgPropertyOptions: {},
     selectedNodes: [],
+    selectedEdges: [],
+    inspectedNodeId: null,
+    inspectedEdgeId: null,
     selectedNodeColorProperty: '',
     selectedNodeSizeProperty: '',
     selectedRadioNodeColor: undefined,
@@ -280,7 +362,11 @@ async function finalizeGraph(
   });
 
   sigma.refresh();
-  focusCameraOnNodes(sigma, graph, highlightNodeIds);
+  if (highlightNodeIds.length > 0) {
+    focusCameraOnNodes(sigma, graph, highlightNodeIds);
+  } else {
+    resetOptimusViewport(sigma);
+  }
   (sigma as Sigma<NodeAttributes, EdgeAttributes> & EventEmitter).emit('loaded');
   await persistGraph(graph);
 }

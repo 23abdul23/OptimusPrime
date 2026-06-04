@@ -19,6 +19,7 @@ import { betweenness, closeness, eigenvector } from 'graphology-metrics/centrali
 import { density, diameter } from 'graphology-metrics/graph';
 import { allSimplePaths } from 'graphology-simple-path';
 import type { GeneProperties, NodeColorType, NodeSizeType } from './data';
+import { normalizeGraphSelection } from './graph/selection-context';
 import { useKGStore } from './hooks/use-kg-store';
 import { useStore } from './hooks/use-store';
 import type { RadioOptions } from './interface';
@@ -1840,12 +1841,15 @@ export function selectMultipleNodes(
   }
 
   // Update selection in store
-  const currentSelection = appendBool ? store.selectedNodes || [] : [];
+  const currentGraphSelection = useKGStore.getState();
+  const currentSelection = appendBool ? currentGraphSelection.selectedNodes || [] : [];
   const newSelection = [...new Set([...currentSelection, ...nodeIds])];
-
-  useKGStore.setState({
-    selectedNodes: newSelection,
+  const nextGraphSelection = normalizeGraphSelection(graph, {
+    nodeIds: newSelection,
+    edgeIds: appendBool ? currentGraphSelection.selectedEdges : [],
   });
+
+  currentGraphSelection.setGraphSelection(nextGraphSelection);
 
   // Also update nodeSearchQuery for visual highlighting
   const labels = newSelection.map(id => nodeIdToLabel(graph, id) || id);

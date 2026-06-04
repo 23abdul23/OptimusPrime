@@ -43,6 +43,10 @@ const VISIBLE_GRAPH_PATTERNS = [
   /\bcurrent network\b/i,
   /\bvisible graph\b/i,
   /\bvisible network\b/i,
+  /\bthis graph\b/i,
+  /\bthe graph\b/i,
+  /\bthis network\b/i,
+  /\bthe network\b/i,
   /\bthis subgraph\b/i,
   /\bthe subgraph\b/i,
 ];
@@ -78,11 +82,31 @@ export class GraphContextAgentService {
       selectedNodeContext,
       state,
     });
+    const visibleNodes =
+      networkContext?.visibleNodeContext && networkContext.visibleNodeContext.length > 0
+        ? networkContext.visibleNodeContext
+        : state.visibleNodeIds.reduce<GraphSelectionNodeContext[]>((nodes, nodeId) => {
+            const entity = state.activeEntities.find((candidate) => candidate.id === nodeId);
+            if (!entity) {
+              return nodes;
+            }
+
+            nodes.push({
+              id: entity.id,
+              label: entity.displayName,
+              nodeType: entity.typeName,
+            });
+
+            return nodes;
+          }, []);
 
     return {
       activeAnchors,
       selectedNodes: selectedNodeContext,
       selectedEdges: selectedEdgeContext,
+      visibleNodes,
+      visibleNodeIds: networkContext?.visibleNodeIds ?? state.visibleNodeIds,
+      visibleEdgeIds: networkContext?.visibleEdgeIds ?? state.visibleEdgeIds,
       graphScope: {
         mode: this.pickGraphScopeMode({
           activeAnchors,

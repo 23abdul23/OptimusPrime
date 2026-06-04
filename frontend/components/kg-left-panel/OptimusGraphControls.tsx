@@ -338,8 +338,8 @@ export function OptimusGraphControls() {
 
     useKGStore.setState({
       nodeSearchQuery: nodeId,
-      selectedNodes: [nodeId],
     });
+    useKGStore.getState().setGraphSelection({ nodeIds: [nodeId], edgeIds: [] });
     sigmaInstance.refresh();
     return true;
   }
@@ -356,8 +356,8 @@ export function OptimusGraphControls() {
     await replaceWithSubgraph(result.id);
     useKGStore.setState({
       nodeSearchQuery: result.id,
-      selectedNodes: [result.id],
     });
+    useKGStore.getState().setGraphSelection({ nodeIds: [result.id], edgeIds: [] });
   }
 
   async function handleRandomLoad() {

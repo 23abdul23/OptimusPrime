@@ -86,7 +86,9 @@ export class GraphAgentService {
         const selectedEdgeEvidence = this.buildSelectedEdgeContextEvidence(
           promptDto.selectedEdgeContext ?? [],
           graphContext.activeAnchors,
-          graphContext.graphReferences.referencesEdges || graphContext.graphReferences.referencesSelection,
+          (promptDto.selectedEdgeContext ?? []).length > 0 ||
+            graphContext.graphReferences.referencesEdges ||
+            graphContext.graphReferences.referencesSelection,
         );
 
         if (intent.operation === 'network-summary' && promptDto.networkContext) {
@@ -132,6 +134,7 @@ export class GraphAgentService {
             ...previousState,
             sessionId,
             selectedNodeIds: promptDto.networkContext.selectedNodeIds ?? previousState.selectedNodeIds,
+            selectedEdgeIds: promptDto.networkContext.selectedEdgeIds ?? previousState.selectedEdgeIds,
             visibleNodeIds: promptDto.networkContext.visibleNodeIds ?? previousState.visibleNodeIds,
             visibleEdgeIds: promptDto.networkContext.visibleEdgeIds ?? previousState.visibleEdgeIds,
             updatedAt: new Date().toISOString(),
@@ -162,11 +165,110 @@ export class GraphAgentService {
           return;
         }
 
+        const localResolution = this.resolveVisibleGraphMentions(
+          extractedQuery.mentions,
+          graphContext.selectedNodes.length > 0 ? graphContext.selectedNodes : graphContext.visibleNodes,
+        );
+
+        if (queryRoute.requiresEntityResolution && localResolution.ambiguous.length > 0) {
+          const evidenceBundle = this.evidenceAgentService.buildBundle({
+            query,
+            items: [
+              ...selectedEdgeEvidence,
+              ...localResolution.ambiguous.map((ambiguity, index) => ({
+                id: `ambiguous-visible-mention-${index}`,
+                kind: 'query' as const,
+                title: `Ambiguous graph-visible entity: ${ambiguity.mention}`,
+                summary: `I found ${ambiguity.candidates.length} graph-visible matches for "${ambiguity.mention}": ${ambiguity.candidates.map((candidate) => candidate.label).join(', ')}. Please refine which one you mean.`,
+                score: 0.68,
+                nodeIds: ambiguity.candidates.map((candidate) => candidate.id),
+                edgeIds: [],
+                metadata: {
+                  ambiguousMention: ambiguity.mention,
+                  candidateCount: ambiguity.candidates.length,
+                  candidates: ambiguity.candidates,
+                },
+              })),
+            ],
+            resolvedEntities: [...selectedEntities],
+            plan: [
+              {
+                id: `clarify-visible-entity-${Date.now()}`,
+                intent: 'relationship-analysis',
+                operation: 'resolve-explicit-mentions',
+                executor: 'resolution-agent',
+                tool: 'resolveEntity',
+                description: 'Clarify the intended graph-visible entity before retrieval continues.',
+                params: {
+                  ambiguities: localResolution.ambiguous.map((ambiguity) => ({
+                    mention: ambiguity.mention,
+                    candidates: ambiguity.candidates,
+                  })),
+                },
+              },
+            ],
+            warnings: localResolution.ambiguous.map(
+              (ambiguity) =>
+                `The current graph contains multiple matches for "${ambiguity.mention}": ${ambiguity.candidates.map((candidate) => candidate.label).join(', ')}.`,
+            ),
+            selectedNodeIds: (promptDto.selectedNodeContext ?? []).map((node) => node.id),
+            visibleNodeIds: promptDto.networkContext?.visibleNodeIds ?? previousState.visibleNodeIds,
+            replanAttempts: 0,
+          });
+
+          const nextState = await this.conversationStateService.saveConversationGraphState(
+            this.buildNextState({
+              previousState,
+              sessionId,
+              resolvedEntities: [...selectedEntities],
+              evidenceBundle,
+              selectedNodeIds: (promptDto.selectedNodeContext ?? []).map((node) => node.id),
+              selectedEdgeIds: (promptDto.selectedEdgeContext ?? []).map((edge) => edge.id),
+              networkContext: promptDto.networkContext,
+            }),
+          );
+
+          writer.write({
+            type: 'data-graphEvidence',
+            id: `graph-evidence-${responseId}`,
+            data: evidenceBundle,
+          });
+          writer.write({
+            type: 'data-graphActions',
+            id: `graph-actions-${responseId}`,
+            data: [],
+          });
+          writer.write({
+            type: 'data-graphState',
+            id: `graph-state-${responseId}`,
+            data: {
+              sessionId,
+              state: nextState,
+            },
+          });
+          this.writeText(
+            writer,
+            localResolution.ambiguous
+              .map(
+                (ambiguity) =>
+                  `I found ${ambiguity.candidates.length} ${ambiguity.mention}-related node${ambiguity.candidates.length === 1 ? '' : 's'} in the current graph: ${ambiguity.candidates.map((candidate) => candidate.label).join(', ')}. Which one do you mean?`,
+              )
+              .join(' '),
+          );
+          return;
+        }
+
+        const unresolvedLocalMentions = extractedQuery.mentions.filter(
+          (mention) => !localResolution.resolvedMentionTexts.has(mention.text.trim().toLowerCase()),
+        );
         const resolvedQueryEntities = queryRoute.requiresEntityResolution
-          ? await this.entityResolutionAgentService.resolveEntities(
-              extractedQuery.mentions,
-              extractedQuery.concepts,
-            )
+          ? [
+              ...localResolution.resolvedEntities,
+              ...(await this.entityResolutionAgentService.resolveEntities(
+                unresolvedLocalMentions,
+                localResolution.resolvedEntities.length > 0 ? [] : extractedQuery.concepts,
+              )),
+            ]
           : [];
         const resolvedEntities = this.combineResolvedEntities({
           resolvedQueryEntities,
@@ -298,6 +400,45 @@ export class GraphAgentService {
           replanAttempts += 1;
           accumulatedPlan = [...accumulatedPlan, ...replan];
           currentPlanBatch = replan;
+        }
+
+        if (
+          evidenceBundle.items.length === 0 &&
+          intent.operation === 'graph-summary' &&
+          promptDto.networkContext &&
+          promptDto.networkContext.totalNodes > 0
+        ) {
+          evidenceBundle = this.evidenceAgentService.buildBundle({
+            query,
+            items: [
+              {
+                id: `visible-network-fallback-${Date.now()}`,
+                kind: 'query',
+                title: 'Visible network summary',
+                summary: this.buildVisibleNetworkSummary(promptDto.networkContext),
+                score: 0.52,
+                nodeIds: promptDto.networkContext.visibleNodeIds ?? [],
+                edgeIds: promptDto.networkContext.visibleEdgeIds ?? [],
+                metadata: {
+                  totalNodes: promptDto.networkContext.totalNodes,
+                  totalEdges: promptDto.networkContext.totalEdges,
+                  topNodeTypes: promptDto.networkContext.topNodeTypes ?? [],
+                  summarySource: 'frontend-visible-network-context',
+                },
+              },
+            ],
+            resolvedEntities,
+            plan: accumulatedPlan,
+            warnings: Array.from(
+              new Set([
+                ...accumulatedWarnings,
+                'Detailed backend graph-summary retrieval was unavailable, so this summary was derived from the current visible network context.',
+              ]),
+            ),
+            selectedNodeIds: (promptDto.selectedNodeContext ?? []).map((node) => node.id),
+            visibleNodeIds: promptDto.networkContext.visibleNodeIds ?? previousState.visibleNodeIds,
+            replanAttempts,
+          });
         }
 
         const nextState = await this.conversationStateService.saveConversationGraphState(
@@ -504,6 +645,109 @@ export class GraphAgentService {
       }));
   }
 
+  private resolveVisibleGraphMentions(
+    mentions: Array<{ text: string; typeHints?: string[] }>,
+    visibleNodes: GraphSelectionNodeContext[],
+  ) {
+    const resolvedEntities: ResolvedEntity[] = [];
+    const resolvedMentionTexts = new Set<string>();
+    const ambiguous: Array<{ mention: string; candidates: GraphSelectionNodeContext[] }> = [];
+    const uniqueVisibleNodes = visibleNodes.filter(
+      (node, index, nodes) => nodes.findIndex((candidate) => candidate.id === node.id) === index,
+    );
+
+    for (const mention of mentions) {
+      const normalizedMention = this.normalizeEntityLikeText(mention.text);
+      if (normalizedMention.length < 3) {
+        continue;
+      }
+
+      const candidates = uniqueVisibleNodes.filter((node) => {
+        const normalizedLabel = this.normalizeEntityLikeText(node.label);
+        if (normalizedLabel.length === 0) {
+          return false;
+        }
+
+        if (!this.matchesTypeHint(node.nodeType, mention.typeHints ?? [])) {
+          return false;
+        }
+
+        return (
+          normalizedLabel === normalizedMention ||
+          normalizedLabel.includes(normalizedMention) ||
+          normalizedMention.includes(normalizedLabel)
+        );
+      });
+
+      if (candidates.length === 1) {
+        resolvedEntities.push({
+          id: candidates[0].id,
+          query: mention.text,
+          displayName: candidates[0].label,
+          typeCode: candidates[0].nodeType ?? 'Entity',
+          typeName: candidates[0].nodeType ?? 'Entity',
+          confidence: 0.99,
+          matchedOn: ['visible-graph'],
+          resolutionStage: 'exact',
+          source: 'selected',
+        });
+        resolvedMentionTexts.add(mention.text.trim().toLowerCase());
+        continue;
+      }
+
+      const exactMatches = candidates.filter(
+        (candidate) => this.normalizeEntityLikeText(candidate.label) === normalizedMention,
+      );
+      if (exactMatches.length === 1) {
+        resolvedEntities.push({
+          id: exactMatches[0].id,
+          query: mention.text,
+          displayName: exactMatches[0].label,
+          typeCode: exactMatches[0].nodeType ?? 'Entity',
+          typeName: exactMatches[0].nodeType ?? 'Entity',
+          confidence: 1,
+          matchedOn: ['visible-graph-exact'],
+          resolutionStage: 'exact',
+          source: 'selected',
+        });
+        resolvedMentionTexts.add(mention.text.trim().toLowerCase());
+        continue;
+      }
+
+      if (candidates.length > 1) {
+        ambiguous.push({
+          mention: mention.text,
+          candidates: candidates.slice(0, 8),
+        });
+      }
+    }
+
+    return {
+      resolvedEntities,
+      resolvedMentionTexts,
+      ambiguous,
+    };
+  }
+
+  private normalizeEntityLikeText(value: string) {
+    return value
+      .trim()
+      .toLowerCase()
+      .replace(/\s+(gene|protein|drug|pathway|disease|syndrome|disorder|phenotype|guideline)s?\b/g, '')
+      .replace(/^(which|what|how|does|do|the|this|these|those|selected|connected|related|associated|linked|involved)\s+/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  private matchesTypeHint(nodeType: string | undefined, typeHints: string[]) {
+    if (!nodeType || typeHints.length === 0) {
+      return true;
+    }
+
+    const normalizedNodeType = nodeType.toLowerCase();
+    return typeHints.some((hint) => normalizedNodeType.includes(hint.toLowerCase()));
+  }
+
   private combineResolvedEntities(params: {
     resolvedQueryEntities: ResolvedEntity[];
     selectedEntities: ResolvedEntity[];
@@ -570,5 +814,26 @@ export class GraphAgentService {
       seen.add(action.id);
       return true;
     });
+  }
+
+  private buildVisibleNetworkSummary(networkContext: GraphNetworkContext) {
+    const topNodeTypes = (networkContext.topNodeTypes ?? [])
+      .slice(0, 5)
+      .map(({ type, count }) => `${type} (${count})`)
+      .join(', ');
+
+    const keyEntityPreview = (networkContext.visibleNodeContext ?? [])
+      .slice(0, 6)
+      .map((node) => `${node.label}${node.nodeType ? ` [${node.nodeType}]` : ''}`)
+      .join(', ');
+
+    return [
+      `Graph Overview: The visible network contains ${networkContext.totalNodes} nodes and ${networkContext.totalEdges} edges.`,
+      `Key Entities: ${keyEntityPreview || 'Visible node previews were not provided in the request context.'}.`,
+      `Graph Structure: This is a visible-network summary derived from the current frontend graph context because no explicit node selection was provided.`,
+      `Major Relationship Types: Relationship-type distribution was not available in the fallback context.`,
+      `Central Nodes: Centrality was not computed in the fallback context.`,
+      `Biological Interpretation: The current visible graph is dominated by ${topNodeTypes || 'mixed node types'}, but a full topology-backed interpretation requires successful backend subgraph analysis.`,
+    ].join('\n\n');
   }
 }

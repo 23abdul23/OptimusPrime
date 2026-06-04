@@ -31,8 +31,18 @@ export const GraphAgentChatRequestSchema = z.object({
       totalNodes: z.number().int().nonnegative(),
       totalEdges: z.number().int().nonnegative(),
       selectedNodeIds: z.array(z.string()).optional(),
+      selectedEdgeIds: z.array(z.string()).optional(),
       visibleNodeIds: z.array(z.string()).optional(),
       visibleEdgeIds: z.array(z.string()).optional(),
+      visibleNodeContext: z
+        .array(
+          z.object({
+            id: z.string(),
+            label: z.string(),
+            nodeType: z.string().optional(),
+          }),
+        )
+        .optional(),
       topNodeTypes: z
         .array(
           z.object({

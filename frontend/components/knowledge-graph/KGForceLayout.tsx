@@ -4,35 +4,60 @@ import type EventEmitter from 'events';
 import { useCallback, useEffect, useRef } from 'react';
 import { useKGStore } from '@/lib/hooks';
 import type { EdgeAttributes, NodeAttributes } from '@/lib/interface';
+import { focusOptimusNodes, resetOptimusViewport } from '@/lib/optimuskg';
 
 export function KGForceLayout() {
   const sigma = useSigma<NodeAttributes, EdgeAttributes>();
   const workerRef = useRef<Worker | null>(null);
-  const graph = sigma.getGraph();
   const settings = useKGStore(state => state.forceSettings);
   const defaultNodeSize = useKGStore(state => state.defaultNodeSize);
+  const tickCountRef = useRef(0);
+  const recenterTimeoutRef = useRef<number | null>(null);
 
   const handleWorkerMessage = useCallback(
     (event: MessageEvent) => {
-      if (!graph) return;
-
       const { type, positions } = event.data;
+      const graph = sigma.getGraph();
+      if (!graph) return;
 
       if (type === 'tick' && positions) {
         for (const { ID, x, y } of positions) {
           graph.setNodeAttribute(ID, 'x', x);
           graph.setNodeAttribute(ID, 'y', y);
         }
+
+        tickCountRef.current += 1;
+        if (tickCountRef.current % 4 === 0) {
+          sigma.refresh();
+        }
+
+        if (recenterTimeoutRef.current) {
+          window.clearTimeout(recenterTimeoutRef.current);
+        }
+        recenterTimeoutRef.current = window.setTimeout(() => {
+          resetOptimusViewport(sigma);
+        }, 220);
+      }
+
+      if (type === 'end') {
+        sigma.refresh();
+        resetOptimusViewport(sigma);
       }
     },
-    [graph],
+    [sigma],
   );
 
   // Initialize worker and simulation
   // biome-ignore lint/correctness/useExhaustiveDependencies: not needed
   useEffect(() => {
-    (sigma as EventEmitter).once('loaded', () => {
+    const handleLoaded = () => {
       const graph = sigma.getGraph();
+      tickCountRef.current = 0;
+
+      if (workerRef.current) {
+        workerRef.current.terminate();
+        workerRef.current = null;
+      }
 
       // Create worker
       workerRef.current = new Worker(new URL('../../lib/force-layout.worker.ts', import.meta.url), { type: 'module' });
@@ -69,10 +94,20 @@ export function KGForceLayout() {
           },
         },
       });
-    });
+      window.setTimeout(() => {
+        resetOptimusViewport(sigma);
+      }, 80);
+    };
+
+    (sigma as EventEmitter).on('loaded', handleLoaded);
 
     // Cleanup
     return () => {
+      (sigma as EventEmitter).off('loaded', handleLoaded);
+      if (recenterTimeoutRef.current) {
+        window.clearTimeout(recenterTimeoutRef.current);
+        recenterTimeoutRef.current = null;
+      }
       workerRef.current?.terminate();
       workerRef.current = null;
     };
