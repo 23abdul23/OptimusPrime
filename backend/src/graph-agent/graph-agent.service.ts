@@ -5,6 +5,7 @@ import { ConversationGraphStateService } from './conversation-graph-state.servic
 import { EntityExtractionService } from './entity-extraction.service';
 import { EntityResolutionService } from './entity-resolution.service';
 import { EvidenceSelectionService } from './evidence-selection.service';
+import { GraphContextAgentService } from './graph-context-agent.service';
 import { GraphRetrieverService } from './graph-retriever.service';
 import type { GraphAgentChatRequestDto } from './graph-agent.dto';
 import type {
@@ -20,13 +21,16 @@ import { extractLatestUserText } from './graph-agent.utils';
 import { ResponseSynthesisService } from './response-synthesis.service';
 import { RetrievalPlannerService } from './retrieval-planner.service';
 import type { GraphEvidenceBundle, RetrievalPlanStep } from './graph-agent.types';
+import { QueryRouterService } from './query-router.service';
 
 @Injectable()
 export class GraphAgentService {
   constructor(
     private readonly conversationStateService: ConversationGraphStateService,
+    private readonly graphContextAgentService: GraphContextAgentService,
     private readonly entityExtractionService: EntityExtractionService,
     private readonly entityResolutionService: EntityResolutionService,
+    private readonly queryRouterService: QueryRouterService,
     private readonly retrievalPlannerService: RetrievalPlannerService,
     private readonly graphRetrieverService: GraphRetrieverService,
     private readonly evidenceSelectionService: EvidenceSelectionService,
@@ -49,12 +53,25 @@ export class GraphAgentService {
         const responseId = `${sessionId}-${Date.now()}`;
 
         const previousState = await this.conversationStateService.getConversationGraphState(sessionId);
+        const queryRoute = this.queryRouterService.route({
+          query,
+          selectedNodeContext: promptDto.selectedNodeContext ?? [],
+          selectedEdgeContext: promptDto.selectedEdgeContext ?? [],
+        });
+        const graphContext = this.graphContextAgentService.build({
+          query,
+          queryRoute,
+          selectedNodeContext: promptDto.selectedNodeContext ?? [],
+          selectedEdgeContext: promptDto.selectedEdgeContext ?? [],
+          networkContext: promptDto.networkContext,
+          state: previousState,
+        });
         const extractedQuery = this.entityExtractionService.extractQuery({ query });
-        const selectedEntities = this.buildSelectedContextEntities(promptDto.selectedNodeContext ?? []);
+        const selectedEntities = this.buildSelectedContextEntities(graphContext.activeAnchors);
         const selectedEdgeEvidence = this.buildSelectedEdgeContextEvidence(
           promptDto.selectedEdgeContext ?? [],
-          promptDto.selectedNodeContext ?? [],
-          extractedQuery.selectionReferences.length > 0,
+          graphContext.activeAnchors,
+          graphContext.graphReferences.referencesEdges || graphContext.graphReferences.referencesSelection,
         );
 
         if (extractedQuery.intent.operation === 'network-summary' && promptDto.networkContext) {
@@ -93,18 +110,24 @@ export class GraphAgentService {
           return;
         }
 
-        const resolvedQueryEntities = await this.entityResolutionService.resolveEntities(
-          extractedQuery.mentions,
-          extractedQuery.concepts,
-        );
+        const resolvedQueryEntities =
+          queryRoute.category === 'GRAPH_QUERY'
+            ? []
+            : await this.entityResolutionService.resolveEntities(
+                extractedQuery.mentions,
+                extractedQuery.concepts,
+              );
         const resolvedEntities = this.combineResolvedEntities({
           resolvedQueryEntities,
           selectedEntities,
-          extractedQuery,
+          queryRoute,
         });
         const unresolvedMentions = this.getUnresolvedMentionTexts(extractedQuery.mentions, resolvedQueryEntities);
 
-        if (this.shouldBlockOnUnresolvedMentions(extractedQuery.mentions.length, extractedQuery.intent.operation, unresolvedMentions)) {
+        if (
+          queryRoute.category !== 'GRAPH_QUERY' &&
+          this.shouldBlockOnUnresolvedMentions(extractedQuery.mentions.length, extractedQuery.intent.operation, unresolvedMentions)
+        ) {
           const evidenceBundle = this.evidenceSelectionService.buildBundle({
             query,
             items: selectedEdgeEvidence,
@@ -166,10 +189,11 @@ export class GraphAgentService {
 
         const plan = this.retrievalPlannerService.plan({
           query,
+          queryRoute,
+          graphContext,
           extractedQuery,
           resolvedEntities,
           state: previousState,
-          selectedNodeContext: promptDto.selectedNodeContext ?? [],
         });
         const retrieval = await this.graphRetrieverService.executePlan(plan, resolvedEntities);
         const evidenceBundle = this.evidenceSelectionService.buildBundle({
@@ -418,12 +442,12 @@ export class GraphAgentService {
   private combineResolvedEntities(params: {
     resolvedQueryEntities: ResolvedEntity[];
     selectedEntities: ResolvedEntity[];
-    extractedQuery: ReturnType<EntityExtractionService['extractQuery']>;
+    queryRoute: ReturnType<QueryRouterService['route']>;
   }) {
-    const { resolvedQueryEntities, selectedEntities, extractedQuery } = params;
+    const { resolvedQueryEntities, selectedEntities, queryRoute } = params;
     const shouldIncludeSelected =
       selectedEntities.length > 0 &&
-      (extractedQuery.selectionReferences.length > 0 || extractedQuery.intent.operation === 'graph-expansion');
+      (queryRoute.category === 'GRAPH_QUERY' || queryRoute.category === 'MIXED_QUERY');
 
     const merged = new Map<string, ResolvedEntity>();
     const orderedEntities = shouldIncludeSelected

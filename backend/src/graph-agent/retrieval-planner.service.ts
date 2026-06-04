@@ -1,22 +1,25 @@
 import { Injectable } from '@nestjs/common';
 import type {
-  ConversationGraphState,
-  ExtractedQuery,
-  ResolvedEntity,
-  RetrievalPlanStep,
-} from './graph-agent.types';
+    ConversationGraphState,
+    ExtractedQuery,
+    GraphContextResult,
+    QueryRoute,
+    ResolvedEntity,
+    RetrievalPlanStep,
+  } from './graph-agent.types';
 import { createStepId } from './graph-agent.utils';
 
 @Injectable()
 export class RetrievalPlannerService {
   plan(params: {
     query: string;
+    queryRoute: QueryRoute;
+    graphContext: GraphContextResult;
     extractedQuery: ExtractedQuery;
     resolvedEntities: ResolvedEntity[];
     state: ConversationGraphState;
-    selectedNodeContext: Array<{ id: string; label: string; nodeType?: string }>;
   }): RetrievalPlanStep[] {
-    const { query, extractedQuery, resolvedEntities, state, selectedNodeContext } = params;
+    const { query, queryRoute, graphContext, extractedQuery, resolvedEntities, state } = params;
     const normalized = query.toLowerCase();
 
     const explicitEntities = resolvedEntities.filter((entity) => entity.source !== 'concept');
@@ -29,7 +32,7 @@ export class RetrievalPlannerService {
       explicitEntities,
       conceptResolvedEntities,
       state,
-      selectedNodeContext,
+      selectedIds: new Set(graphContext.activeAnchors.map((node) => node.id)),
     });
     const primary = explicitEntities[0] ?? conceptResolvedEntities[0] ?? contextAnchors[0];
     const secondary = this.pickSecondaryEntity({
@@ -46,7 +49,7 @@ export class RetrievalPlannerService {
       resolvedEntities,
       primary,
       state,
-      selectedNodeContext,
+      graphContext,
     );
     const expansionNodeTypes = this.pickExpansionNodeTypes(query, extractedQuery, resolvedEntities);
 
@@ -58,6 +61,34 @@ export class RetrievalPlannerService {
           tool: 'executeGuardedCypher',
           description: 'Run a validated read-only Cypher query.',
           params: { userQuery: query },
+        },
+      ];
+    }
+
+    if (queryRoute.category === 'GRAPH_QUERY' && seedEntities.length > 0) {
+      if (/\bsummariz(?:e|ing)\b|\bdescribe\b|\bexplain\b/.test(normalized)) {
+        return [
+          {
+            id: createStepId('graph-summary'),
+            intent: 'graph-summary',
+            tool: 'getNodeDetails',
+            description: `Summarize ${seedEntities.length} graph-selected node${seedEntities.length === 1 ? '' : 's'}.`,
+            params: {
+              nodeIds: seedEntities.map((entity) => entity.id).slice(0, 8),
+            },
+          },
+        ];
+      }
+
+      return [
+        {
+          id: createStepId('graph-selection-details'),
+          intent: 'graph-summary',
+          tool: 'getNodeDetails',
+          description: `Load metadata for ${seedEntities.length} graph-selected node${seedEntities.length === 1 ? '' : 's'}.`,
+          params: {
+            nodeIds: seedEntities.map((entity) => entity.id).slice(0, 8),
+          },
         },
       ];
     }
@@ -373,10 +404,9 @@ export class RetrievalPlannerService {
     explicitEntities: ResolvedEntity[];
     conceptResolvedEntities: ResolvedEntity[];
     state: ConversationGraphState;
-    selectedNodeContext: Array<{ id: string; label: string; nodeType?: string }>;
+    selectedIds: Set<string>;
   }) {
-    const { query, extractedQuery, explicitEntities, conceptResolvedEntities, state, selectedNodeContext } = params;
-    const selectedIds = new Set(selectedNodeContext.map((node) => node.id));
+    const { query, extractedQuery, explicitEntities, conceptResolvedEntities, state, selectedIds } = params;
     const explicitIds = new Set(explicitEntities.map((entity) => entity.id));
 
     const candidates = [...state.activeEntities, ...conceptResolvedEntities]
@@ -444,9 +474,9 @@ export class RetrievalPlannerService {
     resolvedEntities: ResolvedEntity[],
     primary: ResolvedEntity | undefined,
     state: ConversationGraphState,
-    selectedNodeContext: Array<{ id: string; label: string; nodeType?: string }>,
+    graphContext: GraphContextResult,
   ) {
-    const selectedIds = selectedNodeContext.map((node) => node.id).filter((nodeId) => nodeId.length > 0);
+    const selectedIds = graphContext.activeAnchors.map((node) => node.id).filter((nodeId) => nodeId.length > 0);
     if (selectedIds.length > 0) {
       return Array.from(new Set(selectedIds)).slice(0, 5);
     }

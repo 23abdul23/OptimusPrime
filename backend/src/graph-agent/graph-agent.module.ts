@@ -9,9 +9,11 @@ import { ConversationGraphStateService } from './conversation-graph-state.servic
 import { EntityExtractionService } from './entity-extraction.service';
 import { EntityResolutionService } from './entity-resolution.service';
 import { EvidenceSelectionService } from './evidence-selection.service';
+import { GraphContextAgentService } from './graph-context-agent.service';
 import { GraphAgentController } from './graph-agent.controller';
 import { GraphAgentService } from './graph-agent.service';
 import { GraphRetrieverService } from './graph-retriever.service';
+import { QueryRouterService } from './query-router.service';
 import { ResponseSynthesisService } from './response-synthesis.service';
 import { RetrievalPlannerService } from './retrieval-planner.service';
 
@@ -49,8 +51,10 @@ import { RetrievalPlannerService } from './retrieval-planner.service';
   providers: [
     ThrottlerBehindProxyGuard,
     ConversationGraphStateService,
+    GraphContextAgentService,
     EntityExtractionService,
     EntityResolutionService,
+    QueryRouterService,
     RetrievalPlannerService,
     GraphRetrieverService,
     EvidenceSelectionService,

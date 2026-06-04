@@ -2,6 +2,7 @@ import type { UIMessage } from 'ai';
 import type { SerializedGraphPayload } from '@/optimuskg/optimuskg.service';
 
 export type GraphIntent =
+  | 'graph-summary'
   | 'relationship-analysis'
   | 'drug-search'
   | 'pathway-search'
@@ -48,6 +49,7 @@ export interface ExtractedConcept {
 export interface QueryIntentClassification {
   primary: GraphIntent;
   operation:
+    | 'graph-summary'
     | 'relationship-analysis'
     | 'path-search'
     | 'entity-search'
@@ -63,6 +65,32 @@ export interface QueryIntentClassification {
   requestedEntityTypes: string[];
   allowContextFallback: boolean;
   radius?: number;
+}
+
+export type QueryCategory =
+  | 'ENTITY_QUERY'
+  | 'GRAPH_QUERY'
+  | 'MIXED_QUERY'
+  | 'CYPHER_QUERY'
+  | 'UNKNOWN';
+
+export interface QueryRoute {
+  category: QueryCategory;
+  reasons: string[];
+  signals: {
+    hasGraphReference: boolean;
+    hasExplicitEntitySignal: boolean;
+    hasCypherSignal: boolean;
+    hasSelectionContext: boolean;
+  };
+}
+
+export interface GraphReferenceResolution {
+  referencesSelection: boolean;
+  referencesNodes: boolean;
+  referencesEdges: boolean;
+  referencesVisibleGraph: boolean;
+  referencesSessionGraph: boolean;
 }
 
 export interface ExtractedQuery {
@@ -108,6 +136,22 @@ export interface GraphNetworkContext {
     type: string;
     count: number;
   }>;
+}
+
+export interface GraphScope {
+  mode: 'selection' | 'visible-subgraph' | 'session' | 'none';
+  selectedNodeCount: number;
+  selectedEdgeCount: number;
+  visibleNodeCount: number;
+  visibleEdgeCount: number;
+}
+
+export interface GraphContextResult {
+  activeAnchors: GraphSelectionNodeContext[];
+  graphScope: GraphScope;
+  graphReferences: GraphReferenceResolution;
+  selectedNodeTypes: string[];
+  selectedEdgeTypes: string[];
 }
 
 export interface RetrievalPlanStep {
