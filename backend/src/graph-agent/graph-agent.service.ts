@@ -20,7 +20,7 @@ import type {
 import { extractLatestUserText } from './graph-agent.utils';
 import { IntentAgentService } from './intent-agent.service';
 import { ResponseSynthesisService } from './response-synthesis.service';
-import { RetrievalPlannerService } from './retrieval-planner.service';
+import { RetrievalPlanningAgentService } from './retrieval-planning-agent.service';
 import type { GraphEvidenceBundle, RetrievalPlanStep } from './graph-agent.types';
 import { QueryRouterService } from './query-router.service';
 
@@ -33,7 +33,7 @@ export class GraphAgentService {
     private readonly intentAgentService: IntentAgentService,
     private readonly entityResolutionAgentService: EntityResolutionAgentService,
     private readonly queryRouterService: QueryRouterService,
-    private readonly retrievalPlannerService: RetrievalPlannerService,
+    private readonly retrievalPlanningAgentService: RetrievalPlanningAgentService,
     private readonly graphRetrieverService: GraphRetrieverService,
     private readonly evidenceSelectionService: EvidenceSelectionService,
     private readonly responseSynthesisService: ResponseSynthesisService,
@@ -143,6 +143,8 @@ export class GraphAgentService {
               {
                 id: `resolve-mentions-${Date.now()}`,
                 intent: 'relationship-analysis',
+                operation: 'resolve-explicit-mentions',
+                executor: 'resolution-agent',
                 tool: 'resolveEntity',
                 description: 'Resolve all explicit biomedical mentions before retrieval continues.',
                 params: {
@@ -194,7 +196,7 @@ export class GraphAgentService {
           return;
         }
 
-        const plan = this.retrievalPlannerService.plan({
+        const plan = this.retrievalPlanningAgentService.plan({
           query,
           queryRoute,
           graphContext,
@@ -341,6 +343,8 @@ export class GraphAgentService {
       {
         id: `network-summary-${Date.now()}`,
         intent: 'network-summary',
+        operation: 'network-summary',
+        executor: 'state',
         tool: 'getConversationGraphState',
         description: 'Summarize the currently visible frontend network.',
         params: {

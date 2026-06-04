@@ -6,12 +6,14 @@ import type {
   QueryIntentClassification,
   QueryRoute,
   ResolvedEntity,
+  RetrievalExecutor,
+  RetrievalOperation,
   RetrievalPlanStep,
 } from './graph-agent.types';
 import { createStepId } from './graph-agent.utils';
 
 @Injectable()
-export class RetrievalPlannerService {
+export class RetrievalPlanningAgentService {
   plan(params: {
     query: string;
     queryRoute: QueryRoute;
@@ -53,67 +55,78 @@ export class RetrievalPlannerService {
 
     if (normalized.includes('cypher') || normalized.includes('query language')) {
       return [
-        {
-          id: createStepId('guarded-cypher'),
+        this.createStep({
+          prefix: 'guarded-cypher',
           intent: 'guarded-cypher',
+          operation: 'execute-custom-cypher',
+          executor: 'cypher-agent',
           tool: 'executeGuardedCypher',
           description: 'Run a validated read-only Cypher query.',
           params: { userQuery: query },
-        },
+        }),
       ];
     }
 
     if (queryRoute.category === 'GRAPH_QUERY' && intent.operation === 'graph-summary') {
       if (graphNodeIds.length > 0) {
         return [
-          {
-            id: createStepId('graph-summary'),
+          this.createStep({
+            prefix: 'graph-summary',
             intent: 'graph-summary',
+            operation: 'summarize-selected-nodes',
+            executor: 'graph-analysis',
             tool: 'summarizeNodes',
             description: `Summarize ${graphNodeIds.length} graph-selected node${graphNodeIds.length === 1 ? '' : 's'}.`,
             params: {
               nodeIds: graphNodeIds,
             },
-          },
+          }),
         ];
       }
 
       if (graphContext.graphScope.mode === 'visible-subgraph' || state.visibleNodeIds.length > 0) {
         return [
-          {
-            id: createStepId('subgraph-summary'),
+          this.createStep({
+            prefix: 'subgraph-summary',
             intent: 'graph-summary',
+            operation: 'summarize-visible-subgraph',
+            executor: 'graph-analysis',
             tool: 'summarizeSubgraph',
             description: 'Summarize the currently visible subgraph.',
             params: {
               nodeIds: state.visibleNodeIds.slice(0, 120),
               edgeIds: state.visibleEdgeIds.slice(0, 240),
             },
-          },
+          }),
         ];
       }
     }
 
     if (queryRoute.category === 'GRAPH_QUERY' && intent.operation === 'graph-comparison' && graphNodeIds.length >= 2) {
       return [
-        {
-          id: createStepId('graph-comparison'),
+        this.createStep({
+          prefix: 'graph-comparison',
           intent: 'graph-comparison',
+          operation: 'compare-nodes',
+          executor: 'graph-analysis',
           tool: 'compareNodes',
           description: `Compare ${graphNodeIds.length} selected graph nodes.`,
           params: {
             nodeIds: graphNodeIds.slice(0, 6),
           },
-        },
+        }),
       ];
     }
 
     if (queryRoute.category === 'GRAPH_QUERY' && intent.operation === 'graph-commonality' && graphNodeIds.length >= 2) {
+      const operation = this.pickCommonalityOperation(query, seedEntities, intent);
       return [
-        {
-          id: createStepId('graph-commonality'),
+        this.createStep({
+          prefix: 'graph-commonality',
           intent: 'graph-commonality',
-          tool: this.pickCommonalityTool(query, seedEntities, intent),
+          operation,
+          executor: 'graph-analysis',
+          tool: this.mapGraphAnalysisTool(operation),
           description: `Find shared graph structure across ${graphNodeIds.length} selected anchors.`,
           params: {
             nodeIds: graphNodeIds.slice(0, 8),
@@ -121,53 +134,61 @@ export class RetrievalPlannerService {
             minSupport: this.pickMinimumSupport(graphNodeIds.length, 'shared'),
             limit: 20,
           },
-        },
+        }),
       ];
     }
 
     if (queryRoute.category === 'GRAPH_QUERY' && intent.operation === 'graph-connections' && graphNodeIds.length >= 2) {
       return [
-        {
-          id: createStepId('graph-connections'),
+        this.createStep({
+          prefix: 'graph-connections',
           intent: 'graph-connections',
+          operation: 'explain-connections',
+          executor: 'graph-analysis',
           tool: 'explainConnections',
           description: `Explain how ${graphNodeIds.length} selected graph nodes are connected.`,
           params: {
             nodeIds: graphNodeIds.slice(0, 6),
             maxDepth: 5,
           },
-        },
+        }),
       ];
     }
 
     if (queryRoute.category === 'GRAPH_QUERY' && graphNodeIds.length > 0) {
       return [
-        {
-          id: createStepId('graph-selection-details'),
+        this.createStep({
+          prefix: 'graph-selection-details',
           intent: 'graph-summary',
+          operation: 'summarize-selected-nodes',
+          executor: 'graph-analysis',
           tool: 'summarizeNodes',
           description: `Summarize ${graphNodeIds.length} graph-selected node${graphNodeIds.length === 1 ? '' : 's'}.`,
           params: {
             nodeIds: graphNodeIds.slice(0, 8),
           },
-        },
+        }),
       ];
     }
 
     if (intent.operation === 'path-search' && primary && secondary && primary.id !== secondary.id) {
       return [
-        {
-          id: createStepId('entity-details'),
+        this.createStep({
+          prefix: 'entity-details',
           intent: 'relationship-analysis',
+          operation: 'load-node-details',
+          executor: 'retrieval-operations',
           tool: 'getNodeDetails',
           description: `Load metadata for ${detailNodeIds.length} resolved entities.`,
           params: {
             nodeIds: detailNodeIds,
           },
-        },
-        {
-          id: createStepId('relationship-evidence'),
+        }),
+        this.createStep({
+          prefix: 'relationship-evidence',
           intent: 'relationship-analysis',
+          operation: 'retrieve-relationship-evidence',
+          executor: 'retrieval-operations',
           tool: 'retrieveEvidence',
           description: `Retrieve direct and shared graph evidence between ${primary.displayName} and ${secondary.displayName}.`,
           params: {
@@ -176,10 +197,12 @@ export class RetrievalPlannerService {
             commonNeighborTypes: ['Gene', 'Protein', 'Pathway', 'Drug', 'Disease', 'Phenotype'],
             limit: 8,
           },
-        },
-        {
-          id: createStepId('shortest-path'),
+        }),
+        this.createStep({
+          prefix: 'shortest-path',
           intent: 'shortest-path',
+          operation: 'find-shortest-path',
+          executor: 'retrieval-operations',
           tool: 'shortestPath',
           description: `Find the shortest explanatory path between ${primary.displayName} and ${secondary.displayName}.`,
           params: {
@@ -187,71 +210,80 @@ export class RetrievalPlannerService {
             targetId: secondary.id,
             maxDepth: 6,
           },
-        },
+        }),
       ];
     }
 
     if (intent.operation === 'comparison' && primary && secondary && primary.id !== secondary.id) {
       return [
-        {
-          id: createStepId('entity-comparison'),
+        this.createStep({
+          prefix: 'entity-comparison',
           intent: 'comparison',
+          operation: 'compare-nodes',
+          executor: 'graph-analysis',
           tool: 'compareNodes',
           description: `Compare ${primary.displayName} and ${secondary.displayName}.`,
           params: {
             nodeIds: [primary.id, secondary.id],
           },
-        },
+        }),
       ];
     }
 
     if (primary && intent.operation === 'drug-indications') {
       return [
-        {
-          id: createStepId('entity-details'),
+        this.createStep({
+          prefix: 'entity-details',
           intent: 'drug-search',
+          operation: 'load-node-details',
+          executor: 'retrieval-operations',
           tool: 'getNodeDetails',
           description: `Load metadata for ${primary.displayName}.`,
           params: {
             nodeIds: [primary.id],
           },
-        },
-        {
-          id: createStepId('drug-indications'),
+        }),
+        this.createStep({
+          prefix: 'drug-indications',
           intent: 'drug-search',
+          operation: 'get-drug-indications',
+          executor: 'retrieval-operations',
           tool: 'getRelatedEntities',
           description: `Retrieve diseases indicated for ${primary.displayName}.`,
           params: {
             nodeId: primary.id,
-            nodeTypes: ['Disease'],
             relationshipTypes: this.pickRelationshipTypes(query, intent, extractedQuery),
             limit: 20,
           },
-        },
+        }),
       ];
     }
 
     if (primary && intent.operation === 'guideline-search') {
       return [
-        {
-          id: createStepId('entity-details'),
+        this.createStep({
+          prefix: 'entity-details',
           intent: 'guideline-search',
+          operation: 'load-node-details',
+          executor: 'retrieval-operations',
           tool: 'getNodeDetails',
           description: `Load metadata for ${primary.displayName}.`,
           params: {
             nodeIds: [primary.id],
           },
-        },
-        {
-          id: createStepId('guidelines'),
+        }),
+        this.createStep({
+          prefix: 'guidelines',
           intent: 'guidelines',
+          operation: 'retrieve-clinical-guidelines',
+          executor: 'retrieval-operations',
           tool: 'retrieveClinicalGuidelines',
           description: `Retrieve clinical guideline nodes linked to ${primary.displayName}.`,
           params: {
             nodeId: primary.id,
             limit: 10,
           },
-        },
+        }),
       ];
     }
 
@@ -261,95 +293,101 @@ export class RetrievalPlannerService {
       seedEntities.every((entity) => /(gene|protein)/i.test(entity.typeName))
     ) {
       return [
-        {
-          id: createStepId('entity-details'),
+        this.createStep({
+          prefix: 'entity-details',
           intent: 'pathway-search',
+          operation: 'load-node-details',
+          executor: 'retrieval-operations',
           tool: 'getNodeDetails',
           description: `Load metadata for ${seedEntities.length} selected or resolved entities.`,
           params: {
             nodeIds: seedEntities.map((entity) => entity.id).slice(0, 8),
           },
-        },
-        {
-          id: createStepId(aggregateMode === 'shared' ? 'shared-pathways' : 'pathway-set'),
-          intent: 'pathway-search',
-          tool: aggregateMode === 'shared' ? 'findSharedPathways' : 'getRelatedEntities',
-          description:
-            aggregateMode === 'shared'
-              ? `Find shared pathways connected to ${seedEntities.map((entity) => entity.displayName).join(', ')}.`
-              : `Find pathways connected to ${seedEntities.map((entity) => entity.displayName).join(', ')} and rank them by support.`,
-          params:
-            aggregateMode === 'shared'
-              ? {
-                  nodeIds: seedEntities.map((entity) => entity.id).slice(0, 8),
-                  minSupport: this.pickMinimumSupport(seedEntities.length, aggregateMode),
-                  limit: 20,
-                }
-              : {
-                  nodeIds: seedEntities.map((entity) => entity.id).slice(0, 8),
-                  nodeTypes: ['Pathway'],
-                  relationshipTypes: this.pickRelationshipTypes(query, intent, extractedQuery),
-                  aggregateMode,
-                  minSupport: this.pickMinimumSupport(seedEntities.length, aggregateMode),
-                  limit: 20,
-                },
-        },
+        }),
+        aggregateMode === 'shared'
+          ? this.createStep({
+              prefix: 'shared-pathways',
+              intent: 'pathway-search',
+              operation: 'find-shared-pathways',
+              executor: 'graph-analysis',
+              tool: 'findSharedPathways',
+              description: `Find shared pathways connected to ${seedEntities.map((entity) => entity.displayName).join(', ')}.`,
+              params: {
+                nodeIds: seedEntities.map((entity) => entity.id).slice(0, 8),
+                minSupport: this.pickMinimumSupport(seedEntities.length, aggregateMode),
+                limit: 20,
+              },
+            })
+          : this.createStep({
+              prefix: 'pathway-set',
+              intent: 'pathway-search',
+              operation: 'get-related-pathways',
+              executor: 'retrieval-operations',
+              tool: 'getRelatedEntities',
+              description: `Find pathways connected to ${seedEntities.map((entity) => entity.displayName).join(', ')} and rank them by support.`,
+              params: {
+                nodeIds: seedEntities.map((entity) => entity.id).slice(0, 8),
+                aggregateMode,
+                minSupport: this.pickMinimumSupport(seedEntities.length, aggregateMode),
+                relationshipTypes: this.pickRelationshipTypes(query, intent, extractedQuery),
+                limit: 20,
+              },
+            }),
       ];
     }
 
     if (primary && intent.operation === 'drug-search') {
       if (seedEntities.length > 1 && seedEntities.every((entity) => /(gene|protein)/i.test(entity.typeName))) {
         return [
-          {
-            id: createStepId('entity-details'),
+          this.createStep({
+            prefix: 'entity-details',
             intent: 'drug-search',
+            operation: 'load-node-details',
+            executor: 'retrieval-operations',
             tool: 'getNodeDetails',
             description: `Load metadata for ${seedEntities.length} selected or resolved entities.`,
             params: {
               nodeIds: seedEntities.map((entity) => entity.id).slice(0, 8),
             },
-          },
-          {
-            id: createStepId(aggregateMode === 'shared' ? 'shared-drugs' : 'drug-set'),
+          }),
+          this.createStep({
+            prefix: aggregateMode === 'shared' ? 'shared-drugs' : 'drug-set',
             intent: 'disease-protein-pathway-drug',
-            tool: aggregateMode === 'shared' ? 'findCommonNeighbors' : 'getRelatedEntities',
+            operation: 'get-related-drugs',
+            executor: 'retrieval-operations',
+            tool: 'getRelatedEntities',
             description:
               aggregateMode === 'shared'
                 ? `Find drugs shared across ${seedEntities.map((entity) => entity.displayName).join(', ')}.`
                 : `Find drugs connected to ${seedEntities.map((entity) => entity.displayName).join(', ')} and rank them by support.`,
-            params:
-              aggregateMode === 'shared'
-                ? {
-                    nodeIds: seedEntities.map((entity) => entity.id).slice(0, 8),
-                    targetTypes: ['Drug'],
-                    minSupport: this.pickMinimumSupport(seedEntities.length, aggregateMode),
-                    limit: 20,
-                  }
-                : {
-                    nodeIds: seedEntities.map((entity) => entity.id).slice(0, 8),
-                    nodeTypes: ['Drug'],
-                    relationshipTypes: this.pickRelationshipTypes(query, intent, extractedQuery),
-                    aggregateMode,
-                    minSupport: this.pickMinimumSupport(seedEntities.length, aggregateMode),
-                    limit: 20,
-                  },
-          },
+            params: {
+              nodeIds: seedEntities.map((entity) => entity.id).slice(0, 8),
+              aggregateMode,
+              minSupport: this.pickMinimumSupport(seedEntities.length, aggregateMode),
+              relationshipTypes: this.pickRelationshipTypes(query, intent, extractedQuery),
+              limit: 20,
+            },
+          }),
         ];
       }
 
       return [
-        {
-          id: createStepId('entity-details'),
+        this.createStep({
+          prefix: 'entity-details',
           intent: 'drug-search',
+          operation: 'load-node-details',
+          executor: 'retrieval-operations',
           tool: 'getNodeDetails',
           description: `Load metadata for ${primary.displayName}.`,
           params: {
             nodeIds: [primary.id],
           },
-        },
-        {
-          id: createStepId('drug-path'),
+        }),
+        this.createStep({
+          prefix: 'drug-path',
           intent: 'disease-protein-pathway-drug',
+          operation: 'get-related-drugs',
+          executor: 'retrieval-operations',
           tool: 'getRelatedEntities',
           description: `Traverse from ${primary.displayName} to genes, proteins, pathways, and drugs.`,
           params: {
@@ -362,50 +400,57 @@ export class RetrievalPlannerService {
             ],
             limit: 12,
           },
-        },
+        }),
       ];
     }
 
     if (primary && (intent.primary === 'disease-genes' || intent.requestedEntityTypes.includes('Gene'))) {
       return [
-        {
-          id: createStepId('entity-details'),
+        this.createStep({
+          prefix: 'entity-details',
           intent: 'disease-genes',
+          operation: 'load-node-details',
+          executor: 'retrieval-operations',
           tool: 'getNodeDetails',
           description: `Load metadata for ${primary.displayName}.`,
           params: {
             nodeIds: [primary.id],
           },
-        },
-        {
-          id: createStepId('disease-genes'),
+        }),
+        this.createStep({
+          prefix: 'disease-genes',
           intent: 'disease-genes',
+          operation: 'get-related-genes',
+          executor: 'retrieval-operations',
           tool: 'getRelatedEntities',
           description: `Retrieve genes related to ${primary.displayName}.`,
           params: {
             nodeId: primary.id,
-            nodeTypes: ['Gene'],
             relationshipTypes: this.pickRelationshipTypes(query, intent, extractedQuery),
             limit: 20,
           },
-        },
+        }),
       ];
     }
 
     if (intent.operation === 'pathway-search' && primary) {
       return [
-        {
-          id: createStepId('entity-details'),
+        this.createStep({
+          prefix: 'entity-details',
           intent: 'pathway-search',
+          operation: 'load-node-details',
+          executor: 'retrieval-operations',
           tool: 'getNodeDetails',
           description: `Load metadata for ${primary.displayName}.`,
           params: {
             nodeIds: [primary.id],
           },
-        },
-        {
-          id: createStepId('pathway-traversal'),
+        }),
+        this.createStep({
+          prefix: 'pathway-traversal',
           intent: 'pathway-search',
+          operation: 'get-related-pathways',
+          executor: 'retrieval-operations',
           tool: 'getRelatedEntities',
           description: `Traverse from ${primary.displayName} to relevant pathways.`,
           params: {
@@ -413,15 +458,17 @@ export class RetrievalPlannerService {
             typeSequences: [['Gene', 'Pathway'], ['Protein', 'Pathway'], ['Pathway']],
             limit: 12,
           },
-        },
+        }),
       ];
     }
 
     if (intent.operation === 'graph-expansion' && expansionSeedNodeIds.length > 0) {
       return [
-        {
-          id: createStepId('expand-current-network'),
+        this.createStep({
+          prefix: 'expand-current-network',
           intent: 'graph-expansion',
+          operation: 'expand-network',
+          executor: 'retrieval-operations',
           tool: 'expandSubgraph',
           description: 'Expand the current graph state from active anchors and explicitly mentioned entities.',
           params: {
@@ -432,15 +479,17 @@ export class RetrievalPlannerService {
             nodeTypes: expansionNodeTypes,
             relationshipTypes: this.pickRelationshipTypes(query, intent, extractedQuery),
           },
-        },
+        }),
       ];
     }
 
     if (intent.operation === 'graph-expansion' && primary) {
       return [
-        {
-          id: createStepId('expand-neighborhood'),
+        this.createStep({
+          prefix: 'expand-neighborhood',
           intent: 'graph-expansion',
+          operation: 'retrieve-neighborhood',
+          executor: 'retrieval-operations',
           tool: 'retrieveSubgraph',
           description: `Load a bounded neighborhood around ${primary.displayName}.`,
           params: {
@@ -451,14 +500,16 @@ export class RetrievalPlannerService {
             nodeTypes: expansionNodeTypes,
             relationshipTypes: this.pickRelationshipTypes(query, intent, extractedQuery),
           },
-        },
+        }),
       ];
     }
 
     return [
-      {
-        id: createStepId('neighborhood'),
+      this.createStep({
+        prefix: 'neighborhood',
         intent: primary ? 'neighborhood' : 'concept-discovery',
+        operation: 'retrieve-neighborhood',
+        executor: 'retrieval-operations',
         tool: 'retrieveSubgraph',
         description: primary
           ? `Load a bounded neighborhood around ${primary.displayName}.`
@@ -473,8 +524,42 @@ export class RetrievalPlannerService {
           nodeTypes: expansionNodeTypes,
           relationshipTypes: this.pickRelationshipTypes(query, intent, extractedQuery),
         },
-      },
+      }),
     ];
+  }
+
+  private createStep(params: {
+    prefix: string;
+    intent: RetrievalPlanStep['intent'];
+    operation: RetrievalOperation;
+    executor: RetrievalExecutor;
+    tool: RetrievalPlanStep['tool'];
+    description: string;
+    params: Record<string, unknown>;
+  }): RetrievalPlanStep {
+    return {
+      id: createStepId(params.prefix),
+      intent: params.intent,
+      operation: params.operation,
+      executor: params.executor,
+      tool: params.tool,
+      description: params.description,
+      params: params.params,
+    };
+  }
+
+  private mapGraphAnalysisTool(operation: RetrievalOperation): RetrievalPlanStep['tool'] {
+    switch (operation) {
+      case 'find-shared-pathways':
+        return 'findSharedPathways';
+      case 'find-shared-diseases':
+        return 'findSharedDiseases';
+      case 'find-shared-genes':
+        return 'findSharedGenes';
+      case 'find-common-neighbors':
+      default:
+        return 'findCommonNeighbors';
+    }
   }
 
   private pickContextAnchors(params: {
@@ -727,29 +812,29 @@ export class RetrievalPlannerService {
     return 1;
   }
 
-  private pickCommonalityTool(query: string, seedEntities: ResolvedEntity[], intent: QueryIntentClassification) {
+  private pickCommonalityOperation(query: string, seedEntities: ResolvedEntity[], intent: QueryIntentClassification) {
     const normalized = query.toLowerCase();
     const selectedTypes = new Set(seedEntities.map((entity) => entity.typeName.toLowerCase()));
 
     if (normalized.includes('pathway') || [...selectedTypes].every((type) => /(gene|protein)/.test(type))) {
-      return 'findSharedPathways' as const;
+      return 'find-shared-pathways' as const;
     }
 
     if (normalized.includes('disease')) {
-      return 'findSharedDiseases' as const;
+      return 'find-shared-diseases' as const;
     }
 
     if (
       normalized.includes('gene') ||
       [...selectedTypes].every((type) => /(disease|phenotype|syndrome|disorder)/.test(type))
     ) {
-      return 'findSharedGenes' as const;
+      return 'find-shared-genes' as const;
     }
 
     if (intent.requestedEntityTypes.length > 0) {
-      return 'findCommonNeighbors' as const;
+      return 'find-common-neighbors' as const;
     }
 
-    return 'findCommonNeighbors' as const;
+    return 'find-common-neighbors' as const;
   }
 }

@@ -24,7 +24,18 @@ export class EvidenceSelectionService {
       .map(({ item }) => item)
       .slice(0, 12);
     const planNeedsAnalyticalEvidence = params.plan.some((step) =>
-      ['getRelatedEntities', 'retrieveEvidence', 'shortestPath', 'retrieveClinicalGuidelines'].includes(step.tool),
+      [
+        'get-related-entities',
+        'get-related-diseases',
+        'get-related-genes',
+        'get-related-proteins',
+        'get-related-pathways',
+        'get-related-drugs',
+        'get-drug-indications',
+        'retrieve-clinical-guidelines',
+        'retrieve-relationship-evidence',
+        'find-shortest-path',
+      ].includes(step.operation),
     );
     const hasAnalyticalEvidence = rankedItems.some((item) =>
       ['relation', 'path', 'guideline'].includes(item.kind),

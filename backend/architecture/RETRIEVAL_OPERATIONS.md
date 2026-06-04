@@ -33,6 +33,27 @@ The planner should emit reusable graph operations such as:
 
 Those operations then map to Neo4j/OptimusKG queries in a dedicated layer.
 
-## Phase 0-2
+## Phase 7 Implementation
 
-No dedicated retrieval-operations layer is added yet. Existing retrieval steps remain in place while routing and graph-context handling are refactored first.
+Phase 7 introduces `RetrievalOperationsService`.
+
+Implemented operations include:
+
+- `load-node-details`
+- `get-related-diseases`
+- `get-related-genes`
+- `get-related-proteins`
+- `get-related-pathways`
+- `get-related-drugs`
+- `get-drug-indications`
+- `retrieve-clinical-guidelines`
+- `retrieve-relationship-evidence`
+- `find-shortest-path`
+- `retrieve-neighborhood`
+- `expand-network`
+
+Execution notes:
+
+- retrieval planning is now operation-first
+- `GraphRetrieverService` coordinates execution but does not own entity-centric retrieval logic
+- Neo4j-backed retrieval operations execute through `CypherAgentService` when Cypher templates are required

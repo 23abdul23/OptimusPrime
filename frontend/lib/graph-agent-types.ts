@@ -40,6 +40,8 @@ export interface GraphNetworkContext {
 export interface RetrievalPlanStep {
   id: string;
   intent: string;
+  operation: string;
+  executor: string;
   tool: string;
   description: string;
   params: Record<string, unknown>;

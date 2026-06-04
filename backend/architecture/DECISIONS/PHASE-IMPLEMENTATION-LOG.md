@@ -135,7 +135,62 @@ Changed files:
 - `backend/src/graph-agent/graph-agent.types.ts`
 - `backend/architecture/DECISIONS/ADR-006-entity-resolution-agent.md`
 
+## Phase 6: Retrieval Planning Agent
+
+Completed:
+
+- introduced `RetrievalPlanningAgentService`
+- changed planner output from tool-first steps to operation-first plan steps
+- added explicit `operation` and `executor` fields to the retrieval plan contract
+- kept the legacy `tool` field only for compatibility with current response/debug payloads
+
+Changed files:
+
+- `backend/src/graph-agent/retrieval-planning-agent.service.ts`
+- `backend/src/graph-agent/graph-agent.service.ts`
+- `backend/src/graph-agent/graph-agent.module.ts`
+- `backend/src/graph-agent/graph-agent.types.ts`
+- `backend/architecture/DECISIONS/ADR-007-retrieval-planning-agent.md`
+
+## Phase 7: Retrieval Operations Layer
+
+Completed:
+
+- introduced `RetrievalOperationsService`
+- moved entity-centric retrieval logic out of `GraphRetrieverService`
+- kept `GraphRetrieverService` as an execution coordinator over:
+  - graph analysis
+  - retrieval operations
+  - cypher agent
+- defined reusable retrieval operations for node details, related-entity lookups, shortest paths, evidence retrieval, neighborhoods, and graph expansion
+
+Changed files:
+
+- `backend/src/graph-agent/retrieval-operations.service.ts`
+- `backend/src/graph-agent/graph-retriever.service.ts`
+- `backend/src/graph-agent/graph-agent.module.ts`
+- `backend/src/graph-agent/graph-agent.types.ts`
+- `backend/architecture/DECISIONS/ADR-008-retrieval-operations-layer.md`
+
+## Phase 8: Cypher Agent
+
+Completed:
+
+- introduced `CypherAgentService`
+- centralized read-only Cypher validation
+- added heuristic Cypher cost estimation
+- moved explicit guarded Cypher execution out of `GraphRetrieverService`
+- routed retrieval-operation template execution through the Cypher agent
+
+Changed files:
+
+- `backend/src/graph-agent/cypher-agent.service.ts`
+- `backend/src/graph-agent/retrieval-operations.service.ts`
+- `backend/src/graph-agent/graph-retriever.service.ts`
+- `backend/src/graph-agent/graph-agent.module.ts`
+- `backend/architecture/DECISIONS/ADR-009-cypher-agent.md`
+
 ## Verification
 
 - frontend typecheck was not required for these backend-only phases
-- backend verification for Phases 3-5 should still be interpreted relative to the pre-existing unrelated missing `clickhouse` modules
+- backend verification for Phases 3-8 should still be interpreted relative to the pre-existing unrelated missing `clickhouse` modules

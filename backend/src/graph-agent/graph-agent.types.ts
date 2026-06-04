@@ -160,9 +160,48 @@ export interface GraphContextResult {
   selectedEdgeTypes: string[];
 }
 
+export type RetrievalExecutor =
+  | 'graph-analysis'
+  | 'retrieval-operations'
+  | 'cypher-agent'
+  | 'state'
+  | 'resolution-agent';
+
+export type RetrievalOperation =
+  | 'resolve-explicit-mentions'
+  | 'network-summary'
+  | 'summarize-selected-nodes'
+  | 'summarize-visible-subgraph'
+  | 'compare-nodes'
+  | 'find-shared-pathways'
+  | 'find-shared-diseases'
+  | 'find-shared-genes'
+  | 'find-common-neighbors'
+  | 'find-hub-nodes'
+  | 'find-bridging-nodes'
+  | 'explain-connections'
+  | 'analyze-cluster'
+  | 'load-node-details'
+  | 'get-related-entities'
+  | 'get-related-diseases'
+  | 'get-related-genes'
+  | 'get-related-proteins'
+  | 'get-related-pathways'
+  | 'get-related-drugs'
+  | 'get-drug-indications'
+  | 'retrieve-clinical-guidelines'
+  | 'retrieve-relationship-evidence'
+  | 'find-shortest-path'
+  | 'traverse-typed-paths'
+  | 'retrieve-neighborhood'
+  | 'expand-network'
+  | 'execute-custom-cypher';
+
 export interface RetrievalPlanStep {
   id: string;
   intent: GraphIntent;
+  operation: RetrievalOperation;
+  executor: RetrievalExecutor;
   tool:
     | 'searchEntities'
     | 'resolveEntity'

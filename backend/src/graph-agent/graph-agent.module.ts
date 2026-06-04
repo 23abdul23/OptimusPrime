@@ -9,6 +9,7 @@ import { ConversationGraphStateService } from './conversation-graph-state.servic
 import { EntityExtractionService } from './entity-extraction.service';
 import { EntityResolutionAgentService } from './entity-resolution-agent.service';
 import { EvidenceSelectionService } from './evidence-selection.service';
+import { CypherAgentService } from './cypher-agent.service';
 import { GraphAnalysisService } from './graph-analysis.service';
 import { GraphContextAgentService } from './graph-context-agent.service';
 import { GraphAgentController } from './graph-agent.controller';
@@ -17,7 +18,8 @@ import { GraphRetrieverService } from './graph-retriever.service';
 import { IntentAgentService } from './intent-agent.service';
 import { QueryRouterService } from './query-router.service';
 import { ResponseSynthesisService } from './response-synthesis.service';
-import { RetrievalPlannerService } from './retrieval-planner.service';
+import { RetrievalOperationsService } from './retrieval-operations.service';
+import { RetrievalPlanningAgentService } from './retrieval-planning-agent.service';
 
 @Module({
   imports: [
@@ -58,7 +60,9 @@ import { RetrievalPlannerService } from './retrieval-planner.service';
     IntentAgentService,
     EntityResolutionAgentService,
     QueryRouterService,
-    RetrievalPlannerService,
+    RetrievalPlanningAgentService,
+    RetrievalOperationsService,
+    CypherAgentService,
     GraphAnalysisService,
     GraphRetrieverService,
     EvidenceSelectionService,
