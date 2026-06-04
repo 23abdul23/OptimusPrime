@@ -7,12 +7,14 @@ import { OptimusKgModule } from '@/optimuskg/optimuskg.module';
 import { ThrottlerBehindProxyGuard } from '@/llm/llm-throttle.guard';
 import { ConversationGraphStateService } from './conversation-graph-state.service';
 import { EntityExtractionService } from './entity-extraction.service';
-import { EntityResolutionService } from './entity-resolution.service';
+import { EntityResolutionAgentService } from './entity-resolution-agent.service';
 import { EvidenceSelectionService } from './evidence-selection.service';
+import { GraphAnalysisService } from './graph-analysis.service';
 import { GraphContextAgentService } from './graph-context-agent.service';
 import { GraphAgentController } from './graph-agent.controller';
 import { GraphAgentService } from './graph-agent.service';
 import { GraphRetrieverService } from './graph-retriever.service';
+import { IntentAgentService } from './intent-agent.service';
 import { QueryRouterService } from './query-router.service';
 import { ResponseSynthesisService } from './response-synthesis.service';
 import { RetrievalPlannerService } from './retrieval-planner.service';
@@ -53,9 +55,11 @@ import { RetrievalPlannerService } from './retrieval-planner.service';
     ConversationGraphStateService,
     GraphContextAgentService,
     EntityExtractionService,
-    EntityResolutionService,
+    IntentAgentService,
+    EntityResolutionAgentService,
     QueryRouterService,
     RetrievalPlannerService,
+    GraphAnalysisService,
     GraphRetrieverService,
     EvidenceSelectionService,
     ResponseSynthesisService,

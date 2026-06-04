@@ -68,8 +68,74 @@ Changed files:
 - `backend/architecture/DECISIONS/ADR-002-graph-context-agent.md`
 - `backend/architecture/DECISIONS/ADR-003-planner.md`
 
+## Phase 3: Graph Analysis Layer
+
+Completed:
+
+- introduced `GraphAnalysisService`
+- added graph-analysis operations for:
+  - selected-node summaries
+  - visible-subgraph summaries
+  - node comparison
+  - shared-pathway, shared-disease, shared-gene, and common-neighbor analysis
+  - hub-node and bridge-node analysis
+  - connection explanation
+  - cluster analysis
+- routed graph-only planning paths into graph-analysis tools instead of generic neighborhood retrieval
+- wired graph-analysis execution through `GraphRetrieverService`
+
+Changed files:
+
+- `backend/src/graph-agent/graph-analysis.service.ts`
+- `backend/src/graph-agent/retrieval-planner.service.ts`
+- `backend/src/graph-agent/graph-retriever.service.ts`
+- `backend/src/graph-agent/graph-agent.module.ts`
+- `backend/src/graph-agent/graph-agent.types.ts`
+- `backend/architecture/DECISIONS/ADR-004-graph-analysis-layer.md`
+
+## Phase 4: Intent Agent
+
+Completed:
+
+- introduced `IntentAgentService`
+- removed intent classification from `EntityExtractionService`
+- rewired orchestration and planner inputs to consume `QueryIntentClassification`
+- narrowed the extraction schema so extraction returns explicit mentions and concepts only
+
+Changed files:
+
+- `backend/src/graph-agent/intent-agent.service.ts`
+- `backend/src/graph-agent/entity-extraction.service.ts`
+- `backend/src/graph-agent/graph-agent.service.ts`
+- `backend/src/graph-agent/retrieval-planner.service.ts`
+- `backend/src/graph-agent/graph-agent.module.ts`
+- `backend/src/graph-agent/graph-agent.types.ts`
+- `backend/architecture/DECISIONS/ADR-003-planner.md`
+- `backend/architecture/DECISIONS/ADR-005-intent-agent.md`
+
+## Phase 5: Entity Resolution Agent
+
+Completed:
+
+- introduced `EntityResolutionAgentService`
+- replaced the blended resolution path in graph-agent orchestration
+- implemented staged resolution order:
+  - exact
+  - alias
+  - synonym
+  - identifier
+  - semantic
+- persisted `resolutionStage` on resolved entities
+
+Changed files:
+
+- `backend/src/graph-agent/entity-resolution-agent.service.ts`
+- `backend/src/graph-agent/graph-agent.service.ts`
+- `backend/src/graph-agent/graph-agent.module.ts`
+- `backend/src/graph-agent/graph-agent.types.ts`
+- `backend/architecture/DECISIONS/ADR-006-entity-resolution-agent.md`
+
 ## Verification
 
 - frontend typecheck was not required for these backend-only phases
-- backend `pnpm exec tsc --noEmit` shows no new graph-agent errors
-- remaining backend failures are the pre-existing unrelated missing `clickhouse` modules
+- backend verification for Phases 3-5 should still be interpreted relative to the pre-existing unrelated missing `clickhouse` modules

@@ -4,6 +4,7 @@ import { Neo4jService } from '@/neo4j/neo4j.service';
 import { OptimusKgService, type SerializedGraphPayload } from '@/optimuskg/optimuskg.service';
 import type { GraphAction, GraphEvidenceItem, GraphToolResult, RetrievalPlanStep, ResolvedEntity } from './graph-agent.types';
 import { compactRecord, parseJsonRecord, parseStringArray, serializeGraphFromRecords, toNumber } from './graph-agent.utils';
+import { GraphAnalysisService } from './graph-analysis.service';
 
 type CypherRow = Record<string, unknown>;
 
@@ -25,6 +26,7 @@ export class GraphRetrieverService {
   constructor(
     private readonly optimusKgService: OptimusKgService,
     private readonly neo4jService: Neo4jService,
+    private readonly graphAnalysisService: GraphAnalysisService,
   ) {}
 
   async executePlan(plan: RetrievalPlanStep[], resolvedEntities: ResolvedEntity[]): Promise<GraphToolResult> {
@@ -35,6 +37,136 @@ export class GraphRetrieverService {
 
     for (const step of plan) {
       switch (step.tool) {
+        case 'summarizeNodes': {
+          const result = await this.graphAnalysisService.summarizeNodes((step.params.nodeIds as string[] | undefined) ?? []);
+          graphDelta = this.mergeGraphDelta(graphDelta, result.graph);
+          graphActions.push(...this.buildGraphActionsFromResult(step.id, result.graph, result.highlightNodeIds));
+          evidence.push(...result.items);
+          warnings.push(...(result.warnings ?? []));
+          break;
+        }
+
+        case 'summarizeSubgraph': {
+          const result = await this.graphAnalysisService.summarizeSubgraph(
+            (step.params.nodeIds as string[] | undefined) ?? [],
+            (step.params.edgeIds as string[] | undefined) ?? [],
+          );
+          graphDelta = this.mergeGraphDelta(graphDelta, result.graph);
+          graphActions.push(...this.buildGraphActionsFromResult(step.id, result.graph, result.highlightNodeIds));
+          evidence.push(...result.items);
+          warnings.push(...(result.warnings ?? []));
+          break;
+        }
+
+        case 'compareNodes': {
+          const result = await this.graphAnalysisService.compareNodes((step.params.nodeIds as string[] | undefined) ?? []);
+          graphDelta = this.mergeGraphDelta(graphDelta, result.graph);
+          graphActions.push(...this.buildGraphActionsFromResult(step.id, result.graph, result.highlightNodeIds));
+          evidence.push(...result.items);
+          warnings.push(...(result.warnings ?? []));
+          break;
+        }
+
+        case 'findSharedPathways': {
+          const result = await this.graphAnalysisService.findSharedPathways(
+            (step.params.nodeIds as string[] | undefined) ?? [],
+            Number(step.params.minSupport ?? 2),
+            Number(step.params.limit ?? 20),
+          );
+          graphDelta = this.mergeGraphDelta(graphDelta, result.graph);
+          graphActions.push(...this.buildGraphActionsFromResult(step.id, result.graph, result.highlightNodeIds));
+          evidence.push(...result.items);
+          warnings.push(...(result.warnings ?? []));
+          break;
+        }
+
+        case 'findSharedDiseases': {
+          const result = await this.graphAnalysisService.findSharedDiseases(
+            (step.params.nodeIds as string[] | undefined) ?? [],
+            Number(step.params.minSupport ?? 2),
+            Number(step.params.limit ?? 20),
+          );
+          graphDelta = this.mergeGraphDelta(graphDelta, result.graph);
+          graphActions.push(...this.buildGraphActionsFromResult(step.id, result.graph, result.highlightNodeIds));
+          evidence.push(...result.items);
+          warnings.push(...(result.warnings ?? []));
+          break;
+        }
+
+        case 'findSharedGenes': {
+          const result = await this.graphAnalysisService.findSharedGenes(
+            (step.params.nodeIds as string[] | undefined) ?? [],
+            Number(step.params.minSupport ?? 2),
+            Number(step.params.limit ?? 20),
+          );
+          graphDelta = this.mergeGraphDelta(graphDelta, result.graph);
+          graphActions.push(...this.buildGraphActionsFromResult(step.id, result.graph, result.highlightNodeIds));
+          evidence.push(...result.items);
+          warnings.push(...(result.warnings ?? []));
+          break;
+        }
+
+        case 'findCommonNeighbors': {
+          const result = await this.graphAnalysisService.findCommonNeighbors(
+            (step.params.nodeIds as string[] | undefined) ?? [],
+            (step.params.targetTypes as string[] | undefined) ?? [],
+            Number(step.params.minSupport ?? 2),
+            Number(step.params.limit ?? 20),
+          );
+          graphDelta = this.mergeGraphDelta(graphDelta, result.graph);
+          graphActions.push(...this.buildGraphActionsFromResult(step.id, result.graph, result.highlightNodeIds));
+          evidence.push(...result.items);
+          warnings.push(...(result.warnings ?? []));
+          break;
+        }
+
+        case 'findHubNodes': {
+          const result = await this.graphAnalysisService.findHubNodes((step.params.nodeIds as string[] | undefined) ?? []);
+          graphDelta = this.mergeGraphDelta(graphDelta, result.graph);
+          graphActions.push(...this.buildGraphActionsFromResult(step.id, result.graph, result.highlightNodeIds));
+          evidence.push(...result.items);
+          warnings.push(...(result.warnings ?? []));
+          break;
+        }
+
+        case 'findBridgingNodes': {
+          const result = await this.graphAnalysisService.findBridgingNodes((step.params.nodeIds as string[] | undefined) ?? []);
+          graphDelta = this.mergeGraphDelta(graphDelta, result.graph);
+          graphActions.push(...this.buildGraphActionsFromResult(step.id, result.graph, result.highlightNodeIds));
+          evidence.push(...result.items);
+          warnings.push(...(result.warnings ?? []));
+          break;
+        }
+
+        case 'explainConnections': {
+          const result = await this.graphAnalysisService.explainConnections(
+            (step.params.nodeIds as string[] | undefined) ?? [],
+            Number(step.params.maxDepth ?? 5),
+          );
+          graphDelta = this.mergeGraphDelta(graphDelta, result.graph);
+          graphActions.push(...this.buildGraphActionsFromResult(step.id, result.graph, result.highlightNodeIds));
+          if (result.graph && result.graph.nodes.length > 1 && result.graph.edges.length > 0) {
+            graphActions.push({
+              id: `${step.id}-path`,
+              type: 'highlight-path',
+              nodeIds: result.graph.nodes.map((node) => node.key),
+              edgeIds: result.graph.edges.map((edge) => edge.key),
+            });
+          }
+          evidence.push(...result.items);
+          warnings.push(...(result.warnings ?? []));
+          break;
+        }
+
+        case 'analyzeCluster': {
+          const result = await this.graphAnalysisService.analyzeCluster((step.params.nodeIds as string[] | undefined) ?? []);
+          graphDelta = this.mergeGraphDelta(graphDelta, result.graph);
+          graphActions.push(...this.buildGraphActionsFromResult(step.id, result.graph, result.highlightNodeIds));
+          evidence.push(...result.items);
+          warnings.push(...(result.warnings ?? []));
+          break;
+        }
+
         case 'getNodeDetails': {
           const details = await this.getNodeDetails((step.params.nodeIds as string[] | undefined) ?? []);
           evidence.push(...details.items);
@@ -914,5 +1046,46 @@ export class GraphRetrieverService {
       topNodeTypes,
       typeSummary,
     };
+  }
+
+  private buildGraphActionsFromResult(
+    stepId: string,
+    graph?: SerializedGraphPayload,
+    highlightNodeIds: string[] = [],
+  ): GraphAction[] {
+    if (!graph) {
+      return [];
+    }
+
+    const nodeIds =
+      highlightNodeIds.length > 0
+        ? highlightNodeIds
+        : graph.nodes.map((node) => node.key).slice(0, Math.min(16, graph.nodes.length));
+
+    return [
+      {
+        id: stepId,
+        type: 'load-subgraph',
+        mode: 'merge',
+        graph,
+        highlightNodeIds: nodeIds,
+      },
+      {
+        id: `${stepId}-focus`,
+        type: 'focus-nodes',
+        nodeIds,
+      },
+    ];
+  }
+
+  private mergeGraphDelta(
+    currentGraph: SerializedGraphPayload | undefined,
+    nextGraph: SerializedGraphPayload | undefined,
+  ) {
+    if (!nextGraph) {
+      return currentGraph;
+    }
+
+    return nextGraph;
   }
 }

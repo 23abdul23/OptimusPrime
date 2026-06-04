@@ -3,7 +3,6 @@ import type {
   ExtractedConcept,
   ExtractedMention,
   ExtractedQuery,
-  QueryIntentClassification,
 } from './graph-agent.types';
 
 const CAPTURED_PHRASE_STOPWORDS = new Set([
@@ -23,6 +22,8 @@ const CAPTURED_PHRASE_STOPWORDS = new Set([
 ]);
 
 const SELECTION_REFERENCE_PATTERNS = [
+  /\bthis node\b/gi,
+  /\bthese nodes\b/gi,
   /\bthis gene\b/gi,
   /\bthis protein\b/gi,
   /\bthis disease\b/gi,
@@ -146,7 +147,7 @@ Return strict JSON only.
 export const GRAPH_AGENT_EXTRACTION_JSON_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['mentions', 'concepts', 'intent'],
+  required: ['mentions', 'concepts'],
   properties: {
     mentions: {
       type: 'array',
@@ -195,18 +196,6 @@ export const GRAPH_AGENT_EXTRACTION_JSON_SCHEMA = {
         },
       },
     },
-    intent: {
-      type: 'object',
-      additionalProperties: false,
-      required: ['primary', 'operation', 'requestedEntityTypes', 'allowContextFallback'],
-      properties: {
-        primary: { type: 'string' },
-        operation: { type: 'string' },
-        requestedEntityTypes: { type: 'array', items: { type: 'string' } },
-        allowContextFallback: { type: 'boolean' },
-        radius: { type: 'integer', minimum: 1 },
-      },
-    },
   },
 } as const;
 
@@ -218,7 +207,6 @@ export class EntityExtractionService {
     const concepts = this.extractConcepts(query, mentions);
     const selectionReferences = this.extractSelectionReferences(query);
     const operatorSignals = this.extractOperatorSignals(query);
-    const intent = this.classifyIntent(query);
 
     return {
       query,
@@ -226,7 +214,6 @@ export class EntityExtractionService {
       concepts,
       selectionReferences,
       operatorSignals,
-      intent,
     };
   }
 
@@ -398,154 +385,6 @@ export class EntityExtractionService {
     return concepts.sort((a, b) => a.span.start - b.span.start);
   }
 
-  private classifyIntent(query: string): QueryIntentClassification {
-    const normalized = query.toLowerCase();
-    const radiusMatch = normalized.match(/\bradius\s+of\s+(\d+)\b/);
-    const radius = radiusMatch ? Number.parseInt(radiusMatch[1], 10) : undefined;
-    const requestedEntityTypes = this.inferRequestedEntityTypes(normalized);
-
-    if (normalized.includes('cypher') || normalized.includes('query language')) {
-      return {
-        primary: 'guarded-cypher',
-        operation: 'guarded-cypher',
-        requestedEntityTypes,
-        allowContextFallback: false,
-      };
-    }
-
-    if (normalized.includes('guideline')) {
-      return {
-        primary: 'guideline-search',
-        operation: 'guideline-search',
-        requestedEntityTypes: requestedEntityTypes.length > 0 ? requestedEntityTypes : ['Guideline'],
-        allowContextFallback: true,
-      };
-    }
-
-    if (normalized.includes('drug')) {
-      return {
-        primary: 'drug-search',
-        operation: 'drug-search',
-        requestedEntityTypes: requestedEntityTypes.length > 0 ? requestedEntityTypes : ['Drug'],
-        allowContextFallback: true,
-      };
-    }
-
-    if (
-      normalized.includes('indicated') ||
-      normalized.includes('approved for') ||
-      normalized.includes('indication')
-    ) {
-      return {
-        primary: 'drug-search',
-        operation: 'drug-indications',
-        requestedEntityTypes: requestedEntityTypes.length > 0 ? requestedEntityTypes : ['Disease'],
-        allowContextFallback: true,
-      };
-    }
-
-    if (normalized.includes('pathway')) {
-      return {
-        primary: 'pathway-search',
-        operation: 'pathway-search',
-        requestedEntityTypes: requestedEntityTypes.length > 0 ? requestedEntityTypes : ['Pathway'],
-        allowContextFallback: true,
-      };
-    }
-
-    if (
-      normalized.includes('how many nodes') ||
-      normalized.includes('how many edges') ||
-      normalized.includes('node count') ||
-      normalized.includes('edge count') ||
-      normalized.includes('current network') ||
-      normalized.includes('current graph')
-    ) {
-      return {
-        primary: 'network-summary',
-        operation: 'network-summary',
-        requestedEntityTypes,
-        allowContextFallback: false,
-      };
-    }
-
-    if (
-      normalized.includes('gene') &&
-      (normalized.includes('associated') ||
-        normalized.includes('related') ||
-        normalized.includes('linked') ||
-        normalized.includes('involved'))
-    ) {
-      return {
-        primary: 'disease-genes',
-        operation: 'entity-search',
-        requestedEntityTypes: requestedEntityTypes.length > 0 ? requestedEntityTypes : ['Gene'],
-        allowContextFallback: true,
-      };
-    }
-
-    if (
-      normalized.includes('expand') ||
-      normalized.includes('radius') ||
-      normalized.includes('network include') ||
-      normalized.includes('network including') ||
-      normalized.includes('graph include') ||
-      normalized.includes('graph including') ||
-      normalized.includes('comprising') ||
-      normalized.includes('comprise') ||
-      normalized.includes('add to the network') ||
-      normalized.includes('add to the graph') ||
-      normalized.includes('bring into the network') ||
-      normalized.includes('network including') ||
-      normalized.includes('show the network') ||
-      normalized.includes('show me a network') ||
-      normalized.includes('update the graph') ||
-      normalized.includes('update the network')
-    ) {
-      return {
-        primary: 'graph-expansion',
-        operation: 'graph-expansion',
-        requestedEntityTypes,
-        allowContextFallback: true,
-        radius,
-      };
-    }
-
-    if (normalized.includes('compare')) {
-      return {
-        primary: 'comparison',
-        operation: 'comparison',
-        requestedEntityTypes,
-        allowContextFallback: true,
-      };
-    }
-
-    if (
-      normalized.includes('role') ||
-      normalized.includes('related to') ||
-      normalized.includes('linked to') ||
-      normalized.includes('shortest path') ||
-      normalized.includes('come into the picture') ||
-      normalized.includes('connected') ||
-      normalized.includes('relationship')
-    ) {
-      return {
-        primary: 'relationship-analysis',
-        operation: 'path-search',
-        requestedEntityTypes,
-        allowContextFallback: true,
-      };
-    }
-
-    return {
-      primary: 'entity-neighborhood',
-      operation: 'neighborhood',
-      requestedEntityTypes,
-      allowContextFallback: true,
-      radius,
-    };
-  }
-
   private inferTypeHints(input: string) {
     const normalized = input.toLowerCase();
     const hints: string[] = [];
@@ -642,31 +481,4 @@ export class EntityExtractionService {
     return [...signals];
   }
 
-  private inferRequestedEntityTypes(normalizedQuery: string) {
-    const requestedEntityTypes = new Set<string>();
-
-    if (/\bgenes?\b/.test(normalizedQuery)) {
-      requestedEntityTypes.add('Gene');
-    }
-    if (/\bproteins?\b/.test(normalizedQuery)) {
-      requestedEntityTypes.add('Protein');
-    }
-    if (/\bpathways?\b/.test(normalizedQuery)) {
-      requestedEntityTypes.add('Pathway');
-    }
-    if (/\bdrugs?\b/.test(normalizedQuery)) {
-      requestedEntityTypes.add('Drug');
-    }
-    if (/\bguidelines?\b/.test(normalizedQuery)) {
-      requestedEntityTypes.add('Guideline');
-    }
-    if (/\bphenotypes?\b|\bsymptoms?\b/.test(normalizedQuery)) {
-      requestedEntityTypes.add('Phenotype');
-    }
-    if (/\bdisease\b|\bdementia\b|\balzheimer(?:'s)?\b|\bcancer\b|\bsyndrome\b|\bdisorder\b/.test(normalizedQuery)) {
-      requestedEntityTypes.add('Disease');
-    }
-
-    return [...requestedEntityTypes];
-  }
 }

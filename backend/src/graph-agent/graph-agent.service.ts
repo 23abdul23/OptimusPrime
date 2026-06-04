@@ -3,7 +3,7 @@ import { createUIMessageStream, type UIMessageStreamWriter } from 'ai';
 import { DEFAULT_MODEL, type ModelId } from '@/llm/model.constants';
 import { ConversationGraphStateService } from './conversation-graph-state.service';
 import { EntityExtractionService } from './entity-extraction.service';
-import { EntityResolutionService } from './entity-resolution.service';
+import { EntityResolutionAgentService } from './entity-resolution-agent.service';
 import { EvidenceSelectionService } from './evidence-selection.service';
 import { GraphContextAgentService } from './graph-context-agent.service';
 import { GraphRetrieverService } from './graph-retriever.service';
@@ -18,6 +18,7 @@ import type {
   ResolvedEntity,
 } from './graph-agent.types';
 import { extractLatestUserText } from './graph-agent.utils';
+import { IntentAgentService } from './intent-agent.service';
 import { ResponseSynthesisService } from './response-synthesis.service';
 import { RetrievalPlannerService } from './retrieval-planner.service';
 import type { GraphEvidenceBundle, RetrievalPlanStep } from './graph-agent.types';
@@ -29,7 +30,8 @@ export class GraphAgentService {
     private readonly conversationStateService: ConversationGraphStateService,
     private readonly graphContextAgentService: GraphContextAgentService,
     private readonly entityExtractionService: EntityExtractionService,
-    private readonly entityResolutionService: EntityResolutionService,
+    private readonly intentAgentService: IntentAgentService,
+    private readonly entityResolutionAgentService: EntityResolutionAgentService,
     private readonly queryRouterService: QueryRouterService,
     private readonly retrievalPlannerService: RetrievalPlannerService,
     private readonly graphRetrieverService: GraphRetrieverService,
@@ -67,6 +69,11 @@ export class GraphAgentService {
           state: previousState,
         });
         const extractedQuery = this.entityExtractionService.extractQuery({ query });
+        const intent = this.intentAgentService.classify({
+          query,
+          queryRoute,
+          graphContext,
+        });
         const selectedEntities = this.buildSelectedContextEntities(graphContext.activeAnchors);
         const selectedEdgeEvidence = this.buildSelectedEdgeContextEvidence(
           promptDto.selectedEdgeContext ?? [],
@@ -74,7 +81,7 @@ export class GraphAgentService {
           graphContext.graphReferences.referencesEdges || graphContext.graphReferences.referencesSelection,
         );
 
-        if (extractedQuery.intent.operation === 'network-summary' && promptDto.networkContext) {
+        if (intent.operation === 'network-summary' && promptDto.networkContext) {
           const evidenceBundle = this.buildNetworkSummaryBundle(query, promptDto.networkContext);
           const nextState = await this.conversationStateService.saveConversationGraphState({
             ...previousState,
@@ -113,7 +120,7 @@ export class GraphAgentService {
         const resolvedQueryEntities =
           queryRoute.category === 'GRAPH_QUERY'
             ? []
-            : await this.entityResolutionService.resolveEntities(
+            : await this.entityResolutionAgentService.resolveEntities(
                 extractedQuery.mentions,
                 extractedQuery.concepts,
               );
@@ -126,7 +133,7 @@ export class GraphAgentService {
 
         if (
           queryRoute.category !== 'GRAPH_QUERY' &&
-          this.shouldBlockOnUnresolvedMentions(extractedQuery.mentions.length, extractedQuery.intent.operation, unresolvedMentions)
+          this.shouldBlockOnUnresolvedMentions(extractedQuery.mentions.length, intent.operation, unresolvedMentions)
         ) {
           const evidenceBundle = this.evidenceSelectionService.buildBundle({
             query,
@@ -191,6 +198,7 @@ export class GraphAgentService {
           query,
           queryRoute,
           graphContext,
+          intent,
           extractedQuery,
           resolvedEntities,
           state: previousState,
@@ -435,6 +443,7 @@ export class GraphAgentService {
         typeName: node.nodeType ?? 'Entity',
         confidence: 1,
         matchedOn: ['selected-context'],
+        resolutionStage: 'exact',
         source: 'selected',
       }));
   }

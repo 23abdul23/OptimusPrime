@@ -3,6 +3,9 @@ import type { SerializedGraphPayload } from '@/optimuskg/optimuskg.service';
 
 export type GraphIntent =
   | 'graph-summary'
+  | 'graph-comparison'
+  | 'graph-commonality'
+  | 'graph-connections'
   | 'relationship-analysis'
   | 'drug-search'
   | 'pathway-search'
@@ -50,6 +53,9 @@ export interface QueryIntentClassification {
   primary: GraphIntent;
   operation:
     | 'graph-summary'
+    | 'graph-comparison'
+    | 'graph-commonality'
+    | 'graph-connections'
     | 'relationship-analysis'
     | 'path-search'
     | 'entity-search'
@@ -99,7 +105,6 @@ export interface ExtractedQuery {
   concepts: ExtractedConcept[];
   selectionReferences: string[];
   operatorSignals: string[];
-  intent: QueryIntentClassification;
 }
 
 export interface ResolvedEntity {
@@ -110,6 +115,7 @@ export interface ResolvedEntity {
   typeName: string;
   confidence: number;
   matchedOn: string[];
+  resolutionStage?: 'exact' | 'alias' | 'synonym' | 'identifier' | 'semantic';
   source: ExtractedMention['source'] | 'concept' | 'selected' | 'memory';
 }
 
@@ -160,6 +166,17 @@ export interface RetrievalPlanStep {
   tool:
     | 'searchEntities'
     | 'resolveEntity'
+    | 'summarizeNodes'
+    | 'summarizeSubgraph'
+    | 'compareNodes'
+    | 'findSharedPathways'
+    | 'findSharedDiseases'
+    | 'findSharedGenes'
+    | 'findCommonNeighbors'
+    | 'findHubNodes'
+    | 'findBridgingNodes'
+    | 'explainConnections'
+    | 'analyzeCluster'
     | 'getNodeDetails'
     | 'retrieveSubgraph'
     | 'expandSubgraph'

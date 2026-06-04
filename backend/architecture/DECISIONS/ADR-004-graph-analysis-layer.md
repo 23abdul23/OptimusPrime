@@ -1,7 +1,7 @@
 # ADR-004: Graph Analysis Layer
 
-- Status: Proposed in Phase 0
-- Phase: 0
+- Status: Accepted and implemented in Phase 3
+- Phase: 3
 
 ## Context
 
@@ -26,5 +26,32 @@ Introduce a dedicated graph-analysis layer after graph context and retrieval pla
 
 ## Implementation Notes
 
-- Not implemented in Phase 0-2.
-- Phase 0 establishes the record so future changes do not collapse back into generic retrieval fallbacks.
+Phase 3 introduces `GraphAnalysisService` and wires graph-analysis operations into the planner and retriever.
+
+Implemented behavior:
+
+- `summarizeNodes`
+- `summarizeSubgraph`
+- `compareNodes`
+- `findSharedPathways`
+- `findSharedDiseases`
+- `findSharedGenes`
+- `findCommonNeighbors`
+- `findHubNodes`
+- `findBridgingNodes`
+- `explainConnections`
+- `analyzeCluster`
+
+Changed files:
+
+- `backend/src/graph-agent/graph-analysis.service.ts`
+- `backend/src/graph-agent/retrieval-planner.service.ts`
+- `backend/src/graph-agent/graph-retriever.service.ts`
+- `backend/src/graph-agent/graph-agent.module.ts`
+- `backend/src/graph-agent/graph-agent.types.ts`
+
+Observed Phase 3 effect:
+
+- graph-only prompts no longer need to fall back to generic neighborhood retrieval
+- selected-node summaries and graph-commonality prompts can execute against explicit graph-analysis tools
+- graph-analysis behavior becomes independently testable from entity resolution
