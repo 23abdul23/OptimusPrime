@@ -80,8 +80,24 @@ export type QueryCategory =
   | 'CYPHER_QUERY'
   | 'UNKNOWN';
 
+export type QueryRouteIntent =
+  | QueryIntentClassification['operation']
+  | 'resolve-explicit-mentions'
+  | 'unknown';
+
+export type PreferredQueryExecutor =
+  | 'graph_analysis'
+  | 'retrieval'
+  | 'mixed'
+  | 'cypher';
+
 export interface QueryRoute {
   category: QueryCategory;
+  intent: QueryRouteIntent;
+  requiresEntityExtraction: boolean;
+  requiresEntityResolution: boolean;
+  requiresGraphContext: boolean;
+  preferredExecutor: PreferredQueryExecutor;
   reasons: string[];
   signals: {
     hasGraphReference: boolean;
@@ -154,6 +170,8 @@ export interface GraphScope {
 
 export interface GraphContextResult {
   activeAnchors: GraphSelectionNodeContext[];
+  selectedNodes: GraphSelectionNodeContext[];
+  selectedEdges: GraphSelectionEdgeContext[];
   graphScope: GraphScope;
   graphReferences: GraphReferenceResolution;
   selectedNodeTypes: string[];

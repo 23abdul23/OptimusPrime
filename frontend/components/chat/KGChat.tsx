@@ -166,6 +166,16 @@ export interface KGChatRenderProps {
 }
 
 function GraphEvidencePanel({ bundle }: { bundle: GraphEvidenceBundle }) {
+  const confidence = Number.isFinite(bundle.confidence) ? bundle.confidence : 0;
+  const confidenceLabel = bundle.confidenceLabel ?? 'low';
+  const assessmentRationale =
+    bundle.assessment?.rationale ??
+    (bundle.warnings.length > 0
+      ? bundle.warnings.join(' ')
+      : bundle.insufficientEvidence
+        ? 'Evidence is partial or insufficient for a fully grounded answer.'
+        : 'Evidence was grounded from retrieved graph results.');
+
   return (
     <div className='mt-2 ml-10 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm shadow-sm'>
       <div className='flex items-center justify-between gap-2'>
@@ -179,7 +189,7 @@ function GraphEvidencePanel({ bundle }: { bundle: GraphEvidenceBundle }) {
 
       <div className='mt-2 text-slate-700'>
         <span className='font-medium'>Confidence:</span>{' '}
-        {bundle.confidenceLabel} ({Math.round(bundle.confidence * 100)}%)
+        {confidenceLabel} ({Math.round(confidence * 100)}%)
       </div>
 
       {bundle.resolvedEntities.length > 0 && (
@@ -200,7 +210,7 @@ function GraphEvidencePanel({ bundle }: { bundle: GraphEvidenceBundle }) {
           {bundle.items.slice(0, 6).map((item) => (
             <div key={item.id} className='rounded-md border border-slate-200 bg-white p-2'>
               <div className='font-medium text-slate-900'>{item.title}</div>
-              <div className='text-slate-600'>{item.summary}</div>
+              <div className='whitespace-pre-wrap text-slate-600'>{item.summary}</div>
             </div>
           ))}
         </div>
@@ -213,7 +223,7 @@ function GraphEvidencePanel({ bundle }: { bundle: GraphEvidenceBundle }) {
       )}
 
       <div className='mt-3 rounded-md bg-slate-100 p-2 text-slate-700 text-xs'>
-        {bundle.assessment.rationale}
+        {assessmentRationale}
       </div>
     </div>
   );
@@ -361,12 +371,12 @@ function GraphAgentDebugPanel(props: {
               <div className='space-y-2'>
                 <div>Status: {latestEvidence.insufficientEvidence ? 'Partial / insufficient' : 'Grounded'}</div>
                 <div>
-                  Confidence: {latestEvidence.confidenceLabel} ({Math.round(latestEvidence.confidence * 100)}%)
+                  Confidence: {latestEvidence.confidenceLabel ?? 'low'} ({Math.round((latestEvidence.confidence ?? 0) * 100)}%)
                 </div>
                 <div>Resolved entities: {latestEvidence.resolvedEntities.length}</div>
                 <div>Evidence items: {latestEvidence.items.length}</div>
                 <div>Plan steps: {latestEvidence.plan.length}</div>
-                <div>Replan attempts: {latestEvidence.assessment.replanAttempts}</div>
+                <div>Replan attempts: {latestEvidence.assessment?.replanAttempts ?? 0}</div>
                 {latestWarnings.length > 0 && <DebugCode value={latestWarnings} />}
               </div>
             ) : (

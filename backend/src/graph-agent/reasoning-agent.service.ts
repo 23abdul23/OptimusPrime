@@ -52,6 +52,9 @@ export class ReasoningAgentService {
         'Use only the provided graph evidence as the source of truth.',
         'Do not invent biomedical facts, entities, mechanisms, or relationships.',
         'Prefer direct relations over shortest paths, and shortest paths over weak neighborhood summaries.',
+        'For graph-summary operations, explain the selected graph rather than enumerating node labels.',
+        'For graph-summary operations, organize the answer as: Graph Overview, Key Entities, Graph Structure, Major Relationship Types, Central Nodes, Biological Interpretation.',
+        'Use graph topology, relationship types, node metadata, and ontology typing diagnostics when they are present in the evidence.',
         'Use the evidence assessment to calibrate certainty.',
         'If confidence is medium or low, say that explicitly.',
         'If the evidence is insufficient, say so explicitly instead of filling gaps.',
@@ -89,6 +92,25 @@ export class ReasoningAgentService {
 
     if (evidence.items.length === 0) {
       return `${confidenceFrame} I could not find enough graph-grounded evidence in OptimusKG to answer "${query}" confidently. ${evidence.warnings.join(' ')}`.trim();
+    }
+
+    const isGraphSummary = evidence.plan.some((step) =>
+      ['summarize-selected-nodes', 'summarize-visible-subgraph'].includes(step.operation),
+    );
+    const graphSummaryItem = evidence.items.find(
+      (item) =>
+        item.kind === 'query' &&
+        typeof item.metadata?.graphShape === 'string' &&
+        typeof item.summary === 'string' &&
+        item.summary.includes('Graph Overview:'),
+    );
+    if (isGraphSummary && graphSummaryItem) {
+      const warningText = evidence.warnings.length > 0 ? `\n\nWarnings: ${evidence.warnings.join(' ')}` : '';
+      const provenanceText =
+        evidence.provenanceHighlights.length > 0
+          ? `\n\nProvenance: ${evidence.provenanceHighlights.slice(0, 4).join(', ')}.`
+          : '';
+      return `${graphSummaryItem.summary}\n\nConfidence: ${confidenceFrame}.${provenanceText}${warningText}`.trim();
     }
 
     const relations = evidence.items.filter((item) => item.kind === 'relation').slice(0, 2);

@@ -7,6 +7,14 @@ import { FocusIcon, ZoomInIcon, ZoomOutIcon } from 'lucide-react';
 export function ZoomControl() {
   const { zoomIn, zoomOut } = useCamera({ duration: 200, factor: 1.5 });
   const sigma = useSigma();
+  const handleReset = () => {
+    const visibleNodes = sigma.getGraph().filterNodes((_node, attr) => !attr.hidden);
+    if (visibleNodes.length === 0) {
+      return;
+    }
+
+    fitViewportToNodes(sigma, visibleNodes, { animate: true });
+  };
 
   return (
     <>
@@ -23,13 +31,7 @@ export function ZoomControl() {
       <div className='react-sigma-control'>
         <button
           type='button'
-          onClick={() =>
-            fitViewportToNodes(
-              sigma,
-              sigma.getGraph().filterNodes((_node, attr) => !attr.hidden),
-              { animate: true },
-            )
-          }
+          onClick={handleReset}
           title='Reset'
         >
           <FocusIcon />

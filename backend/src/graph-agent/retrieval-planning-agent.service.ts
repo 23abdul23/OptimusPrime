@@ -51,7 +51,7 @@ export class RetrievalPlanningAgentService {
     );
     const expansionSeedNodeIds = this.pickExpansionSeeds(resolvedEntities, primary, state, graphContext);
     const expansionNodeTypes = this.pickExpansionNodeTypes(query, intent, resolvedEntities);
-    const graphNodeIds = seedEntities.map((entity) => entity.id).slice(0, 12);
+    const graphNodeIds = seedEntities.map((entity) => entity.id).slice(0, 120);
     const mixedGraphNodeIds = Array.from(
       new Set(
         [
@@ -61,8 +61,9 @@ export class RetrievalPlanningAgentService {
           ...contextAnchors.map((entity) => entity.id),
         ].filter((nodeId) => nodeId.length > 0),
       ),
-    ).slice(0, 12);
+    ).slice(0, 120);
     const graphAnalysisNodeIds = queryRoute.category === 'MIXED_QUERY' ? mixedGraphNodeIds : graphNodeIds;
+    const graphAnalysisEdgeIds = graphContext.selectedEdges.map((edge) => edge.id).slice(0, 240);
 
     if (normalized.includes('cypher') || normalized.includes('query language')) {
       return [
@@ -87,9 +88,15 @@ export class RetrievalPlanningAgentService {
             operation: 'summarize-selected-nodes',
             executor: 'graph-analysis',
             tool: 'summarizeNodes',
-            description: `Summarize ${graphAnalysisNodeIds.length} graph-selected or graph-referenced node${graphAnalysisNodeIds.length === 1 ? '' : 's'}.`,
+            description:
+              graphAnalysisEdgeIds.length > 0
+                ? `Summarize the selected graph with ${graphAnalysisNodeIds.length} node${graphAnalysisNodeIds.length === 1 ? '' : 's'} and ${graphAnalysisEdgeIds.length} edge${graphAnalysisEdgeIds.length === 1 ? '' : 's'}.`
+                : `Summarize ${graphAnalysisNodeIds.length} graph-selected or graph-referenced node${graphAnalysisNodeIds.length === 1 ? '' : 's'}.`,
             params: {
               nodeIds: graphAnalysisNodeIds,
+              edgeIds: graphAnalysisEdgeIds,
+              selectedNodeCount: graphContext.graphScope.selectedNodeCount,
+              selectedEdgeCount: graphContext.graphScope.selectedEdgeCount,
             },
           }),
         ];
@@ -186,12 +193,15 @@ export class RetrievalPlanningAgentService {
           operation: 'summarize-selected-nodes',
           executor: 'graph-analysis',
           tool: 'summarizeNodes',
-          description: `Summarize ${graphNodeIds.length} graph-selected node${graphNodeIds.length === 1 ? '' : 's'}.`,
-          params: {
-            nodeIds: graphNodeIds.slice(0, 8),
-          },
-        }),
-      ];
+            description: `Summarize ${graphNodeIds.length} graph-selected node${graphNodeIds.length === 1 ? '' : 's'}.`,
+            params: {
+              nodeIds: graphNodeIds,
+              edgeIds: graphAnalysisEdgeIds,
+              selectedNodeCount: graphContext.graphScope.selectedNodeCount,
+              selectedEdgeCount: graphContext.graphScope.selectedEdgeCount,
+            },
+          }),
+        ];
     }
 
     if (intent.operation === 'path-search' && primary && secondary && primary.id !== secondary.id) {

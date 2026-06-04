@@ -259,6 +259,22 @@ Completed:
 - expanded deterministic resolution variants for entity-class suffixes and amyloid-beta spelling variants
 - extended mixed graph+entity planning so graph-connection queries can route into graph-analysis instead of falling back incorrectly
 - simplified visible-subgraph graph-analysis loading to avoid unnecessary edge-key scans during subgraph explanation
+- upgraded `QueryRouterService` from category-only routing to execution-strategy routing with:
+  - `intent`
+  - `requiresEntityExtraction`
+  - `requiresEntityResolution`
+  - `requiresGraphContext`
+  - `preferredExecutor`
+- changed orchestration so graph-subject queries can bypass extraction and resolution entirely when the router marks them unnecessary
+- refined graph-summary execution so selected-subgraph summaries use the full selected node/edge context instead of truncating to 12 nodes before analysis
+- upgraded `GraphAnalysisService` graph-summary output to compute graph topology, relationship distributions, central nodes, and ontology-typing diagnostics before reasoning
+- changed graph-summary fallback reasoning so summary answers are structured as:
+  - Graph Overview
+  - Key Entities
+  - Graph Structure
+  - Major Relationship Types
+  - Central Nodes
+  - Biological Interpretation
 
 Changed files:
 
@@ -270,7 +286,12 @@ Changed files:
 - `backend/src/graph-agent/entity-resolution-agent.service.ts`
 - `backend/src/graph-agent/query-router.service.ts`
 - `backend/src/graph-agent/retrieval-planning-agent.service.ts`
+- `backend/src/graph-agent/graph-agent.service.ts`
+- `backend/src/graph-agent/graph-context-agent.service.ts`
+- `backend/src/graph-agent/graph-agent.types.ts`
 - `backend/src/optimuskg/optimuskg.service.ts`
+- `backend/architecture/DECISIONS/ADR-001-query-router.md`
+- `frontend/components/chat/KGChat.tsx`
 
 ## Verification
 

@@ -98,9 +98,12 @@ export class GraphRetrieverService {
   }
 
   private async executeGraphAnalysis(step: RetrievalPlanStep) {
-    switch (step.operation) {
+      switch (step.operation) {
       case 'summarize-selected-nodes':
-        return this.graphAnalysisService.summarizeNodes((step.params.nodeIds as string[] | undefined) ?? []);
+        return this.graphAnalysisService.summarizeNodes(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          (step.params.edgeIds as string[] | undefined) ?? [],
+        );
       case 'summarize-visible-subgraph':
         return this.graphAnalysisService.summarizeSubgraph(
           (step.params.nodeIds as string[] | undefined) ?? [],

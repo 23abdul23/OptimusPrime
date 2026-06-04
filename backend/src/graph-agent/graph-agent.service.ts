@@ -12,6 +12,7 @@ import type {
   ConversationGraphState,
   GraphAction,
   GraphAgentUIMessage,
+  ExtractedQuery,
   GraphEvidenceItem,
   GraphNetworkContext,
   GraphSelectionEdgeContext,
@@ -73,7 +74,9 @@ export class GraphAgentService {
           networkContext: promptDto.networkContext,
           state: previousState,
         });
-        const extractedQuery = this.entityExtractionService.extractQuery({ query });
+        const extractedQuery = queryRoute.requiresEntityExtraction
+          ? this.entityExtractionService.extractQuery({ query })
+          : this.createEmptyExtractedQuery(query);
         const intent = this.intentAgentService.classify({
           query,
           queryRoute,
@@ -159,22 +162,23 @@ export class GraphAgentService {
           return;
         }
 
-        const resolvedQueryEntities =
-          queryRoute.category === 'GRAPH_QUERY'
-            ? []
-            : await this.entityResolutionAgentService.resolveEntities(
-                extractedQuery.mentions,
-                extractedQuery.concepts,
-              );
+        const resolvedQueryEntities = queryRoute.requiresEntityResolution
+          ? await this.entityResolutionAgentService.resolveEntities(
+              extractedQuery.mentions,
+              extractedQuery.concepts,
+            )
+          : [];
         const resolvedEntities = this.combineResolvedEntities({
           resolvedQueryEntities,
           selectedEntities,
           queryRoute,
         });
-        const unresolvedMentions = this.getUnresolvedMentionTexts(extractedQuery.mentions, resolvedQueryEntities);
+        const unresolvedMentions = queryRoute.requiresEntityResolution
+          ? this.getUnresolvedMentionTexts(extractedQuery.mentions, resolvedQueryEntities)
+          : [];
 
         if (
-          queryRoute.category !== 'GRAPH_QUERY' &&
+          queryRoute.requiresEntityResolution &&
           this.shouldBlockOnUnresolvedMentions(extractedQuery.mentions.length, intent.operation, unresolvedMentions)
         ) {
           const evidenceBundle = this.evidenceAgentService.buildBundle({
@@ -415,6 +419,16 @@ export class GraphAgentService {
     writer.write({ type: 'text-start', id });
     writer.write({ type: 'text-delta', id, delta: text });
     writer.write({ type: 'text-end', id });
+  }
+
+  private createEmptyExtractedQuery(query: string): ExtractedQuery {
+    return {
+      query,
+      mentions: [],
+      concepts: [],
+      selectionReferences: [],
+      operatorSignals: [],
+    };
   }
 
   private getUnresolvedMentionTexts(

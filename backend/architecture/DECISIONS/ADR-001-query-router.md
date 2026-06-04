@@ -35,13 +35,20 @@ It classifies requests into:
 
 ## Implementation Notes
 
-Phase 1 implementation introduces `QueryRouterService` and wires it into the first backend graph-agent step before entity resolution.
+Phase 1 introduced `QueryRouterService` and later hardening extended it into an execution-strategy gatekeeper before extraction and resolution.
 
 Implemented behavior:
 
 - classify requests as `ENTITY_QUERY | GRAPH_QUERY | MIXED_QUERY | CYPHER_QUERY | UNKNOWN`
-- bypass entity-resolution-first behavior for graph-only requests
-- allow planner branches to distinguish graph-only selected-node workflows from entity-only workflows
+- return route-level execution strategy fields:
+  - `intent`
+  - `requiresEntityExtraction`
+  - `requiresEntityResolution`
+  - `requiresGraphContext`
+  - `preferredExecutor`
+- allow graph-subject requests such as `Summarize these selected nodes` to bypass extraction and resolution entirely
+- allow mixed requests to combine selected graph context with explicit entity resolution only when needed
+- prevent imperative graph-operation verbs such as `summarize`, `compare`, `explain`, `analyze`, and `describe` from being treated as reasons to force entity work
 
 Changed files:
 
@@ -51,7 +58,7 @@ Changed files:
 - `backend/src/graph-agent/graph-agent.service.ts`
 - `backend/src/graph-agent/retrieval-planner.service.ts`
 
-Observed Phase 1 effect:
+Observed effect after routing hardening:
 
-- graph-only selected-node prompts such as `Summarize these nodes` no longer need to start from entity resolution
-- the system now has a typed route result available before extraction/resolution/planning
+- graph-only selected-node prompts such as `Summarize these nodes` no longer start extraction or resolution
+- the system now has a typed route result that gates downstream stages before orchestration continues

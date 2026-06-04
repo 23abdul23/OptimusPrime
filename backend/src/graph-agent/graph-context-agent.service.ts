@@ -81,6 +81,8 @@ export class GraphContextAgentService {
 
     return {
       activeAnchors,
+      selectedNodes: selectedNodeContext,
+      selectedEdges: selectedEdgeContext,
       graphScope: {
         mode: this.pickGraphScopeMode({
           activeAnchors,

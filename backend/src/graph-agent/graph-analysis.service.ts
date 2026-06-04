@@ -14,6 +14,46 @@ interface GraphAnalysisResult {
   warnings?: string[];
 }
 
+interface GraphTopologySummary {
+  selectedNodeCount: number;
+  analyzedNodeCount: number;
+  selectedEdgeCount: number;
+  analyzedEdgeCount: number;
+  graphShape: 'single-node' | 'star graph' | 'hub-and-spoke graph' | 'path' | 'tree' | 'cluster' | 'mixed';
+  connectedComponents: Array<{
+    size: number;
+    nodeIds: string[];
+  }>;
+  hubNodes: Array<{
+    id: string;
+    label: string;
+    degree: number;
+    nodeType: string;
+  }>;
+  centralNodes: Array<{
+    id: string;
+    label: string;
+    degree: number;
+    relationDiversity: number;
+    nodeType: string;
+  }>;
+  relationshipCounts: Array<{
+    relation: string;
+    count: number;
+  }>;
+  nodeTypeDistribution: Array<{
+    type: string;
+    count: number;
+  }>;
+  density: number;
+  ontologyDiagnostics: Array<{
+    nodeId: string;
+    label: string;
+    nodeType: string;
+    reason: string;
+  }>;
+}
+
 @Injectable()
 export class GraphAnalysisService {
   constructor(
@@ -21,44 +61,62 @@ export class GraphAnalysisService {
     private readonly optimusKgService: OptimusKgService,
   ) {}
 
-  async summarizeNodes(nodeIds: string[]): Promise<GraphAnalysisResult> {
-    const dedupedNodeIds = this.dedupeIds(nodeIds).slice(0, 12);
-    if (dedupedNodeIds.length === 0) {
-      return { items: [], warnings: ['No graph-selected nodes were available to summarize.'] };
+  async summarizeNodes(nodeIds: string[], edgeIds: string[] = []): Promise<GraphAnalysisResult> {
+    const dedupedNodeIds = this.dedupeIds(nodeIds).slice(0, 120);
+    const dedupedEdgeIds = this.dedupeIds(edgeIds).slice(0, 240);
+    if (dedupedNodeIds.length === 0 && dedupedEdgeIds.length === 0) {
+      return { items: [], warnings: ['No graph-selected nodes or edges were available to summarize.'] };
     }
 
-    const { nodes, relationships } = await this.loadNodeSetSubgraph(dedupedNodeIds, [], 64);
+    const { nodes, relationships } = await this.loadNodeSetSubgraph(
+      dedupedNodeIds,
+      dedupedEdgeIds,
+      Math.min(480, Math.max(96, dedupedNodeIds.length * 8, dedupedEdgeIds.length * 4, 64)),
+      { preferExplicitEdges: dedupedEdgeIds.length > 0 },
+    );
     const graph = serializeGraphFromRecords(nodes, relationships, {
       retrieval: 'graph-analysis:summarize-nodes',
       nodeIds: dedupedNodeIds,
+      edgeIds: dedupedEdgeIds,
     });
-    const typeSummary = this.summarizeNodeTypes(graph);
-    const labels = graph.nodes.map((node) => String(node.attributes.label ?? node.key));
+    const topology = this.analyzeGraphTopology(graph, {
+      selectedNodeCount: dedupedNodeIds.length,
+      selectedEdgeCount: dedupedEdgeIds.length,
+    });
+    const sections = this.buildGraphSummarySections(graph, topology);
 
     const items: GraphEvidenceItem[] = [
       {
         id: `summarize-nodes-${Date.now()}`,
         kind: 'query',
         title: 'Selected node summary',
-        summary: `Summarized ${graph.nodes.length} selected nodes with ${graph.edges.length} relationships in the induced subgraph. ${typeSummary}`,
+        summary: sections.join('\n\n'),
         score: 0.88,
         nodeIds: graph.nodes.map((node) => node.key),
         edgeIds: graph.edges.map((edge) => edge.key),
         metadata: {
-          labels: labels.slice(0, 12),
-          nodeCount: graph.nodes.length,
-          edgeCount: graph.edges.length,
-          topNodeTypes: this.topNodeTypes(graph),
+          selectedNodeCount: topology.selectedNodeCount,
+          analyzedNodeCount: topology.analyzedNodeCount,
+          selectedEdgeCount: topology.selectedEdgeCount,
+          analyzedEdgeCount: topology.analyzedEdgeCount,
+          graphShape: topology.graphShape,
+          connectedComponents: topology.connectedComponents,
+          hubNodes: topology.hubNodes,
+          centralNodes: topology.centralNodes,
+          relationshipCounts: topology.relationshipCounts,
+          nodeTypeDistribution: topology.nodeTypeDistribution,
+          density: topology.density,
+          ontologyDiagnostics: topology.ontologyDiagnostics,
         },
       },
     ];
 
-    for (const node of graph.nodes.slice(0, 8)) {
+    for (const node of this.pickSummaryNodes(graph, topology).slice(0, 6)) {
       items.push({
         id: `node-summary-${node.key}`,
         kind: 'entity',
         title: `${String(node.attributes.label ?? node.key)} (${String(node.attributes.nodeType ?? 'Entity')})`,
-        summary: this.buildNodeSummary(node, relationships),
+        summary: this.buildNodeSummary(node, relationships, graph),
         score: 0.72,
         nodeIds: [node.key],
         edgeIds: graph.edges
@@ -67,7 +125,10 @@ export class GraphAnalysisService {
         metadata: compactRecord({
           nodeType: String(node.attributes.nodeType ?? 'Entity'),
           description: typeof node.attributes.description === 'string' ? node.attributes.description : undefined,
-          aliases: Array.isArray(node.attributes.aliases) ? node.attributes.aliases : undefined,
+          aliases: this.extractNodeAliases(node),
+          ontologyCategory: String(
+            node.attributes.ontologyCategory ?? node.attributes.nodeType ?? node.attributes.typeCode ?? 'Entity',
+          ),
         }),
       });
     }
@@ -76,6 +137,11 @@ export class GraphAnalysisService {
       items,
       graph,
       highlightNodeIds: dedupedNodeIds,
+      warnings: topology.ontologyDiagnostics.length
+        ? [
+            `Potential ontology typing mismatches were detected for ${topology.ontologyDiagnostics.length} node${topology.ontologyDiagnostics.length === 1 ? '' : 's'} in the analyzed graph.`,
+          ]
+        : [],
     };
   }
 
@@ -84,8 +150,9 @@ export class GraphAnalysisService {
     const dedupedEdgeIds = this.dedupeIds(edgeIds).slice(0, 240);
     const { nodes, relationships } = await this.loadNodeSetSubgraph(
       dedupedNodeIds,
-      dedupedNodeIds.length > 0 ? [] : dedupedEdgeIds,
+      dedupedEdgeIds,
       240,
+      { preferExplicitEdges: dedupedEdgeIds.length > 0 && dedupedNodeIds.length > 0 },
     );
 
     if (nodes.length === 0 && relationships.length === 0) {
@@ -97,8 +164,11 @@ export class GraphAnalysisService {
       nodeIds: dedupedNodeIds,
       edgeIds: dedupedEdgeIds,
     });
-    const typeSummary = this.summarizeNodeTypes(graph);
-    const hubs = this.rankHubNodes(graph).slice(0, 5);
+    const topology = this.analyzeGraphTopology(graph, {
+      selectedNodeCount: dedupedNodeIds.length || graph.nodes.length,
+      selectedEdgeCount: dedupedEdgeIds.length || graph.edges.length,
+    });
+    const sections = this.buildGraphSummarySections(graph, topology);
 
     return {
       items: [
@@ -106,18 +176,33 @@ export class GraphAnalysisService {
           id: `summarize-subgraph-${Date.now()}`,
           kind: 'query',
           title: 'Subgraph summary',
-          summary: `The active subgraph contains ${graph.nodes.length} nodes and ${graph.edges.length} edges. ${typeSummary}${hubs.length > 0 ? ` Most connected nodes: ${hubs.map((hub) => hub.label).join(', ')}.` : ''}`,
+          summary: sections.join('\n\n'),
           score: 0.86,
           nodeIds: graph.nodes.map((node) => node.key),
           edgeIds: graph.edges.map((edge) => edge.key),
           metadata: {
-            topNodeTypes: this.topNodeTypes(graph),
-            hubs,
+            selectedNodeCount: topology.selectedNodeCount,
+            analyzedNodeCount: topology.analyzedNodeCount,
+            selectedEdgeCount: topology.selectedEdgeCount,
+            analyzedEdgeCount: topology.analyzedEdgeCount,
+            graphShape: topology.graphShape,
+            connectedComponents: topology.connectedComponents,
+            hubNodes: topology.hubNodes,
+            centralNodes: topology.centralNodes,
+            relationshipCounts: topology.relationshipCounts,
+            nodeTypeDistribution: topology.nodeTypeDistribution,
+            density: topology.density,
+            ontologyDiagnostics: topology.ontologyDiagnostics,
           },
         },
       ],
       graph,
-      highlightNodeIds: hubs.map((hub) => hub.id),
+      highlightNodeIds: topology.centralNodes.map((node) => node.id),
+      warnings: topology.ontologyDiagnostics.length
+        ? [
+            `Potential ontology typing mismatches were detected for ${topology.ontologyDiagnostics.length} node${topology.ontologyDiagnostics.length === 1 ? '' : 's'} in the analyzed graph.`,
+          ]
+        : [],
     };
   }
 
@@ -158,7 +243,7 @@ export class GraphAnalysisService {
           id: `compare-node-${node.key}`,
           kind: 'entity' as const,
           title: `${String(node.attributes.label ?? node.key)} (${String(node.attributes.nodeType ?? 'Entity')})`,
-          summary: this.buildNodeSummary(node, relationships),
+          summary: this.buildNodeSummary(node, relationships, graph),
           score: 0.7,
           nodeIds: [node.key],
           edgeIds: graph.edges
@@ -389,7 +474,12 @@ export class GraphAnalysisService {
     }
   }
 
-  private async loadNodeSetSubgraph(nodeIds: string[], edgeIds: string[], limit: number) {
+  private async loadNodeSetSubgraph(
+    nodeIds: string[],
+    edgeIds: string[],
+    limit: number,
+    options: { preferExplicitEdges?: boolean } = {},
+  ) {
     const dedupedNodeIds = this.dedupeIds(nodeIds);
     const dedupedEdgeIds = this.dedupeIds(edgeIds);
     const session = this.neo4jService.getSession();
@@ -413,7 +503,7 @@ export class GraphAnalysisService {
 
       const relationshipRecords: Array<{ get(key: string): Neo4jNode | Neo4jRelationship }> = [];
 
-      if (dedupedNodeIds.length > 0) {
+      if (dedupedNodeIds.length > 0 && !(options.preferExplicitEdges && dedupedEdgeIds.length > 0)) {
         const nodeScopedRelationships = await session.run(
           `
             MATCH (source:Entity)-[rel]-(target:Entity)
@@ -435,7 +525,7 @@ export class GraphAnalysisService {
         const edgeScopedRelationships = await session.run(
           `
             MATCH (source:Entity)-[rel]-(target:Entity)
-            WHERE coalesce(rel.edgeKey, '') IN $edgeIds
+            WHERE coalesce(rel.edgeKey, rel.elementId) IN $edgeIds OR rel.elementId IN $edgeIds
             RETURN source, rel, target
             LIMIT $limit
           `,
@@ -483,17 +573,322 @@ export class GraphAnalysisService {
       .sort((a, b) => b.degree - a.degree || a.label.localeCompare(b.label));
   }
 
-  private buildNodeSummary(node: SerializedGraphPayload['nodes'][number], relationships: Neo4jRelationship[]) {
+  private buildNodeSummary(
+    node: SerializedGraphPayload['nodes'][number],
+    relationships: Neo4jRelationship[],
+    graph: SerializedGraphPayload,
+  ) {
     const connectedRelations = relationships.filter((relationship) => {
       const props = relationship.properties as Record<string, unknown>;
       return String(props.fromId) === node.key || String(props.toId) === node.key;
     });
     const relationTypes = Array.from(new Set(connectedRelations.map((relationship) => relationship.type)));
+    const description = this.extractNodeDescription(node);
+    const aliases = this.extractNodeAliases(node);
+    const ontologyCategory = String(
+      node.attributes.ontologyCategory ?? node.attributes.nodeType ?? node.attributes.typeCode ?? 'Entity',
+    );
+    const nodeDegree = graph.edges.filter((edge) => edge.source === node.key || edge.target === node.key).length;
+    const aliasText = aliases.length > 0 ? ` Aliases: ${aliases.slice(0, 4).join(', ')}.` : '';
+    const relationText =
+      relationTypes.length > 0 ? ` Relationship types in this subgraph: ${relationTypes.slice(0, 5).join(', ')}.` : '';
+    return `${String(node.attributes.label ?? node.key)} is typed as ${ontologyCategory} and has degree ${nodeDegree}.${description ? ` ${description}` : ''}${aliasText}${relationText}`;
+  }
+
+  private analyzeGraphTopology(
+    graph: SerializedGraphPayload,
+    counts: {
+      selectedNodeCount?: number;
+      selectedEdgeCount?: number;
+    },
+  ): GraphTopologySummary {
+    const adjacency = new Map<string, Set<string>>();
+    const relationByNode = new Map<string, Set<string>>();
+    const typeCounts = new Map<string, number>();
+    const relationshipCounts = new Map<string, number>();
+    const degreeByNode = new Map<string, number>();
+
+    for (const node of graph.nodes) {
+      adjacency.set(node.key, new Set());
+      relationByNode.set(node.key, new Set());
+      const type = String(node.attributes.nodeType ?? node.attributes.typeCode ?? 'Entity');
+      typeCounts.set(type, (typeCounts.get(type) ?? 0) + 1);
+    }
+
+    for (const edge of graph.edges) {
+      const relation = String(edge.attributes.relation ?? edge.attributes.edgeType ?? edge.attributes.label ?? 'RELATED_TO');
+      relationshipCounts.set(relation, (relationshipCounts.get(relation) ?? 0) + 1);
+      adjacency.get(edge.source)?.add(edge.target);
+      adjacency.get(edge.target)?.add(edge.source);
+      relationByNode.get(edge.source)?.add(relation);
+      relationByNode.get(edge.target)?.add(relation);
+      degreeByNode.set(edge.source, (degreeByNode.get(edge.source) ?? 0) + 1);
+      degreeByNode.set(edge.target, (degreeByNode.get(edge.target) ?? 0) + 1);
+    }
+
+    const connectedComponents = this.computeConnectedComponents(
+      graph.nodes.map((node) => node.key),
+      adjacency,
+    );
+    const hubNodes = this.rankHubNodes(graph).slice(0, 6);
+    const centralNodes = graph.nodes
+      .map((node) => ({
+        id: node.key,
+        label: String(node.attributes.label ?? node.key),
+        degree: degreeByNode.get(node.key) ?? 0,
+        relationDiversity: relationByNode.get(node.key)?.size ?? 0,
+        nodeType: String(node.attributes.nodeType ?? node.attributes.typeCode ?? 'Entity'),
+        descriptionBoost: this.extractNodeDescription(node).length > 0 ? 1 : 0,
+      }))
+      .sort(
+        (a, b) =>
+          b.degree * 2 +
+            b.relationDiversity * 0.8 +
+            b.descriptionBoost -
+            (a.degree * 2 + a.relationDiversity * 0.8 + a.descriptionBoost) ||
+          a.label.localeCompare(b.label),
+      )
+      .slice(0, 6)
+      .map(({ descriptionBoost: _descriptionBoost, ...rest }) => rest);
+    const density =
+      graph.nodes.length > 1 ? (2 * graph.edges.length) / (graph.nodes.length * (graph.nodes.length - 1)) : 0;
+
+    return {
+      selectedNodeCount: counts.selectedNodeCount ?? graph.nodes.length,
+      analyzedNodeCount: graph.nodes.length,
+      selectedEdgeCount: counts.selectedEdgeCount ?? graph.edges.length,
+      analyzedEdgeCount: graph.edges.length,
+      graphShape: this.inferGraphShape({
+        nodeCount: graph.nodes.length,
+        edgeCount: graph.edges.length,
+        components: connectedComponents,
+        hubNodes,
+        density,
+      }),
+      connectedComponents,
+      hubNodes,
+      centralNodes,
+      relationshipCounts: [...relationshipCounts.entries()]
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .map(([relation, count]) => ({ relation, count })),
+      nodeTypeDistribution: [...typeCounts.entries()]
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .map(([type, count]) => ({ type, count })),
+      density,
+      ontologyDiagnostics: this.detectOntologyTypeIssues(graph.nodes),
+    };
+  }
+
+  private buildGraphSummarySections(graph: SerializedGraphPayload, topology: GraphTopologySummary) {
+    const overview =
+      topology.selectedNodeCount !== topology.analyzedNodeCount || topology.selectedEdgeCount !== topology.analyzedEdgeCount
+        ? `Graph Overview: The selected context contains ${topology.selectedNodeCount} node${topology.selectedNodeCount === 1 ? '' : 's'} and ${topology.selectedEdgeCount} edge${topology.selectedEdgeCount === 1 ? '' : 's'}. OptimusKG analysis loaded ${topology.analyzedNodeCount} node${topology.analyzedNodeCount === 1 ? '' : 's'} and ${topology.analyzedEdgeCount} edge${topology.analyzedEdgeCount === 1 ? '' : 's'} from that graph context.`
+        : `Graph Overview: The analyzed graph contains ${topology.analyzedNodeCount} node${topology.analyzedNodeCount === 1 ? '' : 's'} and ${topology.analyzedEdgeCount} edge${topology.analyzedEdgeCount === 1 ? '' : 's'}.`;
+    const keyEntities = `Key Entities: ${this.summarizeKeyEntities(graph, topology)}.`;
+    const graphStructure = `Graph Structure: ${topology.graphShape} with ${topology.connectedComponents.length} connected component${topology.connectedComponents.length === 1 ? '' : 's'}${topology.connectedComponents.length > 0 ? ` (largest component size ${topology.connectedComponents[0].size})` : ''}. Node-type distribution: ${topology.nodeTypeDistribution
+      .slice(0, 5)
+      .map(({ type, count }) => `${type} (${count})`)
+      .join(', ') || 'not available'}.`;
+    const majorRelationshipTypes = `Major Relationship Types: ${topology.relationshipCounts
+      .slice(0, 6)
+      .map(({ relation, count }) => `${relation} (${count})`)
+      .join(', ') || 'none identified'}.`;
+    const centralNodes = `Central Nodes: ${topology.centralNodes
+      .slice(0, 5)
+      .map((node) => `${node.label} [${node.nodeType}] degree=${node.degree}`)
+      .join(', ') || 'no central nodes identified'}.`;
+    const biologicalInterpretation = `Biological Interpretation: ${this.inferBiologicalInterpretation(graph, topology)}.`;
+
+    return [overview, keyEntities, graphStructure, majorRelationshipTypes, centralNodes, biologicalInterpretation];
+  }
+
+  private summarizeKeyEntities(graph: SerializedGraphPayload, topology: GraphTopologySummary) {
+    return topology.centralNodes
+      .slice(0, 4)
+      .map((centralNode) => {
+        const node = graph.nodes.find((candidate) => candidate.key === centralNode.id);
+        if (!node) {
+          return `${centralNode.label} [${centralNode.nodeType}]`;
+        }
+        const description = this.extractNodeDescription(node);
+        const aliases = this.extractNodeAliases(node);
+        const aliasText = aliases.length > 0 ? `aliases ${aliases.slice(0, 3).join(', ')}` : '';
+        return `${centralNode.label} [${centralNode.nodeType}]${description ? `: ${description}` : aliasText ? ` with ${aliasText}` : ''}`;
+      })
+      .join('; ');
+  }
+
+  private inferBiologicalInterpretation(graph: SerializedGraphPayload, topology: GraphTopologySummary) {
+    const topRelation = topology.relationshipCounts[0]?.relation ?? '';
+    const topCentralNode = graph.nodes.find((node) => node.key === topology.centralNodes[0]?.id);
+    const topLabel = String(topCentralNode?.attributes.label ?? topology.centralNodes[0]?.label ?? '');
+    const topType = String(topCentralNode?.attributes.nodeType ?? topology.centralNodes[0]?.nodeType ?? 'Entity');
+    const measurementLike =
+      /\bmeasurement\b|\bmetabolite\b|\bassay\b|\blevel\b/i.test(topLabel) ||
+      /\bmeasurement\b|\bmetabolite\b|\bassay\b|\blevel\b/i.test(this.extractNodeDescription(topCentralNode));
+    const hasGenes = topology.nodeTypeDistribution.some(({ type }) => /gene|protein/i.test(type));
+    const hasDiseases = topology.nodeTypeDistribution.some(({ type }) => /disease|phenotype|syndrome|disorder/i.test(type));
+    const hasPathways = topology.nodeTypeDistribution.some(({ type }) => /pathway/i.test(type));
+    const hasDrugs = topology.nodeTypeDistribution.some(({ type }) => /drug/i.test(type));
+
+    if (measurementLike && /ASSOCIATED_WITH/i.test(topRelation) && hasGenes) {
+      return `the selected graph is centered on a measurement-like phenotype linked to multiple genes, with ${topology.centralNodes[0]?.label ?? 'a central measurement node'} acting as the hub`;
+    }
+    if (/TARGET/i.test(topRelation) && hasDrugs) {
+      return 'the selected graph looks like a drug-target module connecting therapeutics to molecular targets';
+    }
+    if (/INTERACTS_WITH/i.test(topRelation) && hasGenes) {
+      return 'the selected graph emphasizes molecular interaction structure among genes or proteins rather than disease-level associations';
+    }
+    if (hasDiseases && hasGenes) {
+      return 'the selected graph links disease or phenotype concepts to genes or proteins and suggests a disease-mechanism module';
+    }
+    if (hasPathways && hasGenes) {
+      return 'the selected graph mixes molecular entities with pathway context, suggesting a mechanism-oriented module';
+    }
+
+    return `${topology.graphShape} centered on ${topLabel || 'the selected entities'} with ${topType} nodes connected through ${topology.relationshipCounts
+      .slice(0, 3)
+      .map(({ relation }) => relation)
+      .join(', ') || 'graph relationships'}`;
+  }
+
+  private computeConnectedComponents(nodeIds: string[], adjacency: Map<string, Set<string>>) {
+    const visited = new Set<string>();
+    const components: Array<{ size: number; nodeIds: string[] }> = [];
+
+    for (const nodeId of nodeIds) {
+      if (visited.has(nodeId)) {
+        continue;
+      }
+
+      const queue = [nodeId];
+      const componentNodeIds: string[] = [];
+      visited.add(nodeId);
+
+      while (queue.length > 0) {
+        const current = queue.shift();
+        if (!current) {
+          continue;
+        }
+        componentNodeIds.push(current);
+
+        for (const neighbor of adjacency.get(current) ?? []) {
+          if (visited.has(neighbor)) {
+            continue;
+          }
+          visited.add(neighbor);
+          queue.push(neighbor);
+        }
+      }
+
+      components.push({
+        size: componentNodeIds.length,
+        nodeIds: componentNodeIds.sort((a, b) => a.localeCompare(b)),
+      });
+    }
+
+    return components.sort((a, b) => b.size - a.size || (a.nodeIds[0] ?? '').localeCompare(b.nodeIds[0] ?? ''));
+  }
+
+  private inferGraphShape(params: {
+    nodeCount: number;
+    edgeCount: number;
+    components: Array<{ size: number; nodeIds: string[] }>;
+    hubNodes: Array<{ degree: number }>;
+    density: number;
+  }): GraphTopologySummary['graphShape'] {
+    const { nodeCount, edgeCount, components, hubNodes, density } = params;
+    if (nodeCount <= 1) {
+      return 'single-node';
+    }
+    if (components.length > 1) {
+      return 'mixed';
+    }
+
+    const maxDegree = hubNodes[0]?.degree ?? 0;
+    const secondDegree = hubNodes[1]?.degree ?? 0;
+
+    if (maxDegree >= nodeCount - 1 && secondDegree <= 2) {
+      return 'star graph';
+    }
+    if (maxDegree >= Math.max(3, Math.ceil(nodeCount * 0.45))) {
+      return 'hub-and-spoke graph';
+    }
+    if (edgeCount === nodeCount - 1) {
+      return hubNodes.filter((hub) => hub.degree <= 2).length >= nodeCount - 2 ? 'path' : 'tree';
+    }
+    if (density >= 0.35) {
+      return 'cluster';
+    }
+
+    return 'mixed';
+  }
+
+  private detectOntologyTypeIssues(nodes: SerializedGraphPayload['nodes']) {
+    return nodes
+      .flatMap((node) => {
+        const label = String(node.attributes.label ?? node.key);
+        const description = this.extractNodeDescription(node);
+        const nodeType = String(node.attributes.nodeType ?? node.attributes.typeCode ?? 'Entity');
+        const text = `${label} ${description}`.toLowerCase();
+
+        if (
+          /measurement|metabolite|assay|level/.test(text) &&
+          /(disease|phenotype|syndrome|disorder)/i.test(nodeType)
+        ) {
+          return [
+            {
+              nodeId: node.key,
+              label,
+              nodeType,
+              reason: 'label or description suggests a measurement-like entity but the ontology type is disease-like',
+            },
+          ];
+        }
+
+        return [];
+      })
+      .slice(0, 8);
+  }
+
+  private pickSummaryNodes(graph: SerializedGraphPayload, topology: GraphTopologySummary) {
+    const summaryNodeIds = new Set(topology.centralNodes.map((node) => node.id));
+    return graph.nodes
+      .filter((node) => summaryNodeIds.has(node.key))
+      .sort((a, b) => {
+        const aIndex = topology.centralNodes.findIndex((node) => node.id === a.key);
+        const bIndex = topology.centralNodes.findIndex((node) => node.id === b.key);
+        return aIndex - bIndex;
+      });
+  }
+
+  private extractNodeDescription(node: SerializedGraphPayload['nodes'][number] | undefined) {
+    if (!node) {
+      return '';
+    }
+
     const description =
       typeof node.attributes.description === 'string'
-        ? String(node.attributes.description)
-        : `${String(node.attributes.label ?? node.key)} is represented as a ${String(node.attributes.nodeType ?? 'Entity')} node in OptimusKG.`;
-    return `${description}${relationTypes.length > 0 ? ` Connected relation types: ${relationTypes.slice(0, 5).join(', ')}.` : ''}`;
+        ? node.attributes.description
+        : typeof node.attributes.name === 'string'
+          ? `${node.attributes.name}`
+          : '';
+
+    return description.trim().replace(/\s+/g, ' ').slice(0, 220);
+  }
+
+  private extractNodeAliases(node: SerializedGraphPayload['nodes'][number]) {
+    if (Array.isArray(node.attributes.aliases)) {
+      return node.attributes.aliases.filter((value): value is string => typeof value === 'string' && value.length > 0);
+    }
+    if (Array.isArray(node.attributes.searchTerms)) {
+      return node.attributes.searchTerms.filter(
+        (value): value is string => typeof value === 'string' && value.length > 0,
+      );
+    }
+
+    return [];
   }
 
   private summarizeNodeTypes(graph: SerializedGraphPayload) {
