@@ -38,10 +38,10 @@ The backend container connects to Neo4j over the internal Docker network at `bol
 On a server, only change the exposed host ports in `.env` to avoid clashes:
 
 ```env
-OPTIMUS_FRONTEND_PORT=3500
+OPTIMUS_FRONTEND_PORT=4000
 OPTIMUS_BACKEND_PORT=4500
-OPTIMUS_NEO4J_HTTP_PORT=7974
-OPTIMUS_NEO4J_BOLT_PORT=8187
+OPTIMUS_NEO4J_HTTP_PORT=8474
+OPTIMUS_NEO4J_BOLT_PORT=8687
 ```
 
 If you need the backend to use an external Neo4j instead of the compose-managed one, set:
@@ -76,6 +76,7 @@ Open:
 
 Bolt runs on `bolt://localhost:${OPTIMUS_NEO4J_BOLT_PORT}`.
 The Neo4j credentials are `neo4j` / `optimus-password`, and the database name is `optimusKG`.
+If you run the backend outside Docker against the compose-managed Neo4j instance, point `backend/.env` `NEO4J_URI` at `bolt://host.docker.internal:${OPTIMUS_NEO4J_BOLT_PORT}`.
 
 ### Local Development
 

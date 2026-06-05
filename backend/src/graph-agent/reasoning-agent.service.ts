@@ -11,6 +11,7 @@ import type {
   GraphAction,
   GraphContextResult,
   GraphEvidenceBundle,
+  GraphInterpretation,
   ResolvedEntity,
 } from './graph-agent.types';
 
@@ -40,6 +41,7 @@ export class ReasoningAgentService {
     resolvedEntities: ResolvedEntity[];
     graphContext: GraphContextResult;
     graphActions: GraphAction[];
+    graphInterpretation?: GraphInterpretation;
   }) {
     if (!this.modelRegistry) {
       return null;
@@ -68,6 +70,7 @@ export class ReasoningAgentService {
             `User question: ${params.query}`,
             `Resolved entities: ${this.serializeResolvedEntities(params.resolvedEntities)}`,
             `Graph context: ${this.serializeGraphContext(params.graphContext)}`,
+            `Graph interpretation: ${this.serializeGraphInterpretation(params.graphInterpretation)}`,
             `Plan: ${params.evidence.plan.map((step) => `${step.operation}: ${step.description}`).join(' | ') || 'none'}`,
             `Evidence assessment: ${params.evidence.assessment.rationale}`,
             `Provenance highlights: ${params.evidence.provenanceHighlights.join(' | ') || 'none'}`,
@@ -179,6 +182,20 @@ export class ReasoningAgentService {
           .join('\n');
       })
       .join('\n\n');
+  }
+
+  private serializeGraphInterpretation(graphInterpretation: GraphInterpretation | undefined) {
+    if (!graphInterpretation) {
+      return 'none';
+    }
+
+    return [
+      `theme=${graphInterpretation.theme}`,
+      `networkType=${graphInterpretation.networkType}`,
+      `dominantConcepts=${graphInterpretation.dominantConcepts.join(', ') || 'none'}`,
+      `dominantRelationships=${graphInterpretation.dominantRelationships.join(', ') || 'none'}`,
+      `summary=${graphInterpretation.summary}`,
+    ].join(' | ');
   }
 
   private serializeMetadata(metadata: Record<string, unknown> | undefined) {

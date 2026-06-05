@@ -1,9 +1,14 @@
 import { Injectable } from '@nestjs/common';
+import { z } from 'zod';
+import type { ModelId } from '@/llm/model.constants';
 import type {
   ExtractedConcept,
   ExtractedMention,
   ExtractedQuery,
+  QueryDecomposition,
+  QueryRoute,
 } from './graph-agent.types';
+import { GraphAgentLlmService } from './graph-agent-llm.service';
 
 const CAPTURED_PHRASE_STOPWORDS = new Set([
   'a',
@@ -199,14 +204,99 @@ export const GRAPH_AGENT_EXTRACTION_JSON_SCHEMA = {
   },
 } as const;
 
+const HYBRID_EXTRACTION_SCHEMA = z.object({
+  mentions: z
+    .array(
+      z.object({
+        text: z.string().trim().min(1).max(120),
+        typeHints: z.array(z.string().trim().min(1).max(40)).max(4),
+      }),
+    )
+    .max(8),
+  concepts: z
+    .array(
+      z.object({
+        text: z.string().trim().min(1).max(120),
+        category: z.enum([
+          'disease-area',
+          'biological-process',
+          'therapeutic-area',
+          'entity-class',
+          'phenotype',
+          'anatomy',
+          'general',
+        ]),
+      }),
+    )
+    .max(8),
+  constraints: z.array(z.string().trim().min(1).max(80)).max(8),
+  requestedOutputs: z.array(z.string().trim().min(1).max(40)).max(8),
+  operations: z.array(z.string().trim().min(1).max(80)).max(8),
+});
+
 @Injectable()
 export class EntityExtractionService {
-  extractQuery(params: { query: string }): ExtractedQuery {
+  constructor(private readonly graphAgentLlmService: GraphAgentLlmService) {}
+
+  async extractQuery(params: {
+    query: string;
+    model?: ModelId;
+    queryRoute?: QueryRoute;
+    decomposition?: QueryDecomposition;
+  }): Promise<ExtractedQuery> {
     const { query } = params;
-    const mentions = this.extractMentions(query);
-    const concepts = this.extractConcepts(query, mentions);
+    const baseMentions = this.extractMentions(query);
+    const baseConcepts = this.extractConcepts(query, baseMentions);
     const selectionReferences = this.extractSelectionReferences(query);
     const operatorSignals = this.extractOperatorSignals(query);
+    const llmRefinement =
+      this.shouldUseLlmRefinement(query, params.queryRoute, params.decomposition) &&
+      this.graphAgentLlmService.isAvailable()
+        ? await this.graphAgentLlmService.generateStructuredObject({
+            schema: HYBRID_EXTRACTION_SCHEMA,
+            model: params.model,
+            functionId: 'graph-agent-entity-extraction',
+            temperature: 0,
+            maxOutputTokens: 700,
+            system: [
+              'You extract explicit biomedical spans from the latest user query for a graph agent.',
+              'Return only spans that appear verbatim in the query.',
+              'Do not invent aliases, normalized entities, or graph facts.',
+              'Put qualifiers such as FDA-approved, shared, shortest path, compare, or most affected into constraints.',
+              'Put requested result classes such as drugs, proteins, pathways, diseases, phenotypes, or biological processes into requestedOutputs.',
+            ].join(' '),
+            prompt: [
+              `Query: ${query}`,
+              `Existing deterministic mentions: ${baseMentions.map((mention) => mention.text).join(', ') || 'none'}`,
+              `Existing deterministic concepts: ${baseConcepts.map((concept) => concept.text).join(', ') || 'none'}`,
+              `Existing decomposition summary: ${params.decomposition?.summary ?? 'none'}`,
+            ].join('\n'),
+          })
+        : undefined;
+    const mentions = this.mergeMentions(
+      baseMentions,
+      (llmRefinement?.mentions ?? [])
+        .map((mention) => this.toMention(query, mention.text, mention.typeHints))
+        .filter((mention): mention is ExtractedMention => Boolean(mention)),
+    );
+    const concepts = this.mergeConcepts(
+      baseConcepts,
+      (llmRefinement?.concepts ?? [])
+        .map((concept) => this.toConcept(query, concept.text, concept.category))
+        .filter((concept): concept is ExtractedConcept => Boolean(concept)),
+    );
+    const constraints = this.mergeStringLists(
+      params.decomposition?.constraints ?? [],
+      llmRefinement?.constraints ?? [],
+    );
+    const requestedOutputs = this.mergeStringLists(
+      params.decomposition?.outputs ?? [],
+      llmRefinement?.requestedOutputs ?? [],
+    );
+    const semanticOperations = this.mergeStringLists(
+      params.decomposition?.tasks ?? [],
+      llmRefinement?.operations ?? [],
+    );
 
     return {
       query,
@@ -214,6 +304,11 @@ export class EntityExtractionService {
       concepts,
       selectionReferences,
       operatorSignals,
+      constraints,
+      requestedOutputs,
+      semanticOperations,
+      decomposition: params.decomposition,
+      llmAssisted: Boolean(llmRefinement),
     };
   }
 
@@ -490,4 +585,128 @@ export class EntityExtractionService {
     return [...signals];
   }
 
+  private shouldUseLlmRefinement(
+    query: string,
+    queryRoute: QueryRoute | undefined,
+    decomposition: QueryDecomposition | undefined,
+  ) {
+    const normalized = query.trim().toLowerCase();
+    const tokens = normalized.split(/\s+/).filter((token) => token.length > 0);
+    const hasConstraintSignal =
+      /\bfda-approved\b|\bapproved\b|\bshared\b|\bcommon\b|\bmost affected\b|\bthrough which\b|\bcompare\b/i.test(
+        query,
+      );
+
+    return (
+      Boolean(decomposition) ||
+      tokens.length >= 10 ||
+      hasConstraintSignal ||
+      queryRoute?.category === 'MIXED_QUERY' ||
+      queryRoute?.category === 'GRAPH_DISCOVERY_QUERY'
+    );
+  }
+
+  private toMention(query: string, text: string, typeHints: string[]) {
+    const span = this.findSpan(query, text);
+    if (!span || this.shouldDiscardMention(text.trim())) {
+      return undefined;
+    }
+
+    return {
+      text: text.trim(),
+      span,
+      typeHints: Array.from(new Set([...this.inferTypeHints(text), ...typeHints])),
+      source: 'query' as const,
+    };
+  }
+
+  private toConcept(
+    query: string,
+    text: string,
+    category: ExtractedConcept['category'],
+  ) {
+    const span = this.findSpan(query, text);
+    if (!span) {
+      return undefined;
+    }
+
+    return {
+      text: text.trim(),
+      span,
+      category,
+      source: 'query' as const,
+    };
+  }
+
+  private findSpan(query: string, text: string) {
+    const trimmed = text.trim();
+    if (trimmed.length === 0) {
+      return undefined;
+    }
+
+    const exactIndex = query.indexOf(trimmed);
+    if (exactIndex >= 0) {
+      return {
+        start: exactIndex,
+        end: exactIndex + trimmed.length,
+      };
+    }
+
+    const caseInsensitiveIndex = query.toLowerCase().indexOf(trimmed.toLowerCase());
+    if (caseInsensitiveIndex >= 0) {
+      return {
+        start: caseInsensitiveIndex,
+        end: caseInsensitiveIndex + trimmed.length,
+      };
+    }
+
+    return undefined;
+  }
+
+  private mergeMentions(primary: ExtractedMention[], secondary: ExtractedMention[]) {
+    const merged = new Map<string, ExtractedMention>();
+
+    for (const mention of [...primary, ...secondary]) {
+      const key = `${mention.span.start}:${mention.span.end}:${mention.text.trim().toLowerCase()}`;
+      const existing = merged.get(key);
+      if (!existing) {
+        merged.set(key, {
+          ...mention,
+          typeHints: Array.from(new Set(mention.typeHints)),
+        });
+        continue;
+      }
+
+      merged.set(key, {
+        ...existing,
+        typeHints: Array.from(new Set([...existing.typeHints, ...mention.typeHints])),
+      });
+    }
+
+    return [...merged.values()].sort((a, b) => a.span.start - b.span.start);
+  }
+
+  private mergeConcepts(primary: ExtractedConcept[], secondary: ExtractedConcept[]) {
+    const merged = new Map<string, ExtractedConcept>();
+
+    for (const concept of [...primary, ...secondary]) {
+      const key = `${concept.span.start}:${concept.span.end}:${concept.category}:${concept.text.trim().toLowerCase()}`;
+      if (!merged.has(key)) {
+        merged.set(key, concept);
+      }
+    }
+
+    return [...merged.values()].sort((a, b) => a.span.start - b.span.start);
+  }
+
+  private mergeStringLists(...lists: string[][]) {
+    return Array.from(
+      new Set(
+        lists
+          .flat()
+          .map((value) => value.trim())
+          .filter((value) => value.length > 0),
+      ),
+    );
+  }
 }

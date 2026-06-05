@@ -15,6 +15,7 @@ import {
 } from '@/lib/graph-agent-handoff';
 import type {
   GraphAction,
+  GraphDebugStep,
   GraphAgentUIMessage,
   ConversationGraphState,
   GraphEvidenceBundle,
@@ -98,6 +99,7 @@ type GraphStatePart = {
     state: ConversationGraphState;
   };
 };
+type GraphDebugPart = { type: 'data-graphDebug'; id?: string; data: GraphDebugStep[] };
 
 type GraphAgentDebugPayload = {
   query: string;
@@ -142,6 +144,10 @@ function isGraphActionsPart(part: GraphAgentPart): part is GraphActionsPart {
 
 function isGraphStatePart(part: GraphAgentPart): part is GraphStatePart {
   return part.type === 'data-graphState';
+}
+
+function isGraphDebugPart(part: GraphAgentPart): part is GraphDebugPart {
+  return part.type === 'data-graphDebug';
 }
 
 function graphAgentApiBaseUrl() {
@@ -640,6 +646,52 @@ function DebugCode({ value }: { value: unknown }) {
   );
 }
 
+function graphDebugStatusClass(status: GraphDebugStep['status']) {
+  if (status === 'success') {
+    return 'border-emerald-200 bg-emerald-50';
+  }
+  if (status === 'warning') {
+    return 'border-amber-200 bg-amber-50';
+  }
+  return 'border-slate-200 bg-slate-50';
+}
+
+function GraphDebugStepCard({ step }: { step: GraphDebugStep }) {
+  return (
+    <div className={`rounded-md border p-3 ${graphDebugStatusClass(step.status)}`}>
+      <div className='flex items-start justify-between gap-2'>
+        <div>
+          <div className='font-medium text-slate-900 text-sm'>{step.title}</div>
+          <div className='text-slate-500 text-[11px] uppercase tracking-wide'>{step.stage}</div>
+        </div>
+        <div className='text-slate-500 text-xs'>{new Date(step.createdAt).toLocaleTimeString()}</div>
+      </div>
+      <div className='mt-2 text-slate-700 text-sm'>{step.summary}</div>
+      {step.llm?.used && step.llm.deductions.length > 0 && (
+        <div className='mt-2 rounded-md border border-sky-200 bg-sky-50 p-2'>
+          <div className='mb-1 flex items-center gap-1 font-medium text-sky-900 text-xs uppercase tracking-wide'>
+            <LightbulbIcon className='size-3' />
+            LLM Deductions ({step.llm.mode})
+          </div>
+          <ul className='space-y-1 text-sky-950 text-xs'>
+            {step.llm.deductions.slice(0, 6).map((deduction, index) => (
+              <li key={`${step.id}-deduction-${index}`}>{deduction}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {step.details && (
+        <details className='mt-2'>
+          <summary className='cursor-pointer text-slate-600 text-xs'>Details</summary>
+          <div className='mt-2'>
+            <DebugCode value={step.details} />
+          </div>
+        </details>
+      )}
+    </div>
+  );
+}
+
 function GraphAgentDebugPanel(props: {
   liveContext: {
     selectedNodeContext: GraphSelectionNodeContext[];
@@ -648,10 +700,11 @@ function GraphAgentDebugPanel(props: {
   };
   lastPayload: GraphAgentDebugPayload | null;
   latestEvidence: GraphEvidenceBundle | null;
+  latestDebugSteps: GraphDebugStep[];
   latestGraphState: GraphStatePart['data'] | null;
   status: ReturnType<typeof useChat<GraphAgentUIMessage>>['status'];
 }) {
-  const { liveContext, lastPayload, latestEvidence, latestGraphState, status } = props;
+  const { liveContext, lastPayload, latestEvidence, latestDebugSteps, latestGraphState, status } = props;
   const liveSummary = {
     selectedNodes: liveContext.selectedNodeContext.length,
     selectedEdges: liveContext.selectedEdgeContext.length,
@@ -660,6 +713,15 @@ function GraphAgentDebugPanel(props: {
   };
   const latestWarnings = latestEvidence?.warnings ?? [];
   const backendState = latestGraphState?.state;
+  const llmDeductions = latestDebugSteps.flatMap((step) =>
+    step.llm?.used
+      ? step.llm.deductions.map((deduction) => ({
+          id: `${step.id}-${deduction}`,
+          stage: step.title,
+          deduction,
+        }))
+      : [],
+  );
 
   return (
     <aside className='flex h-full w-[360px] shrink-0 flex-col border-l bg-white'>
@@ -667,7 +729,7 @@ function GraphAgentDebugPanel(props: {
         <BugIcon className='size-4 text-slate-500' />
         <div>
           <div className='font-semibold text-sm text-slate-900'>Graph Agent Debug</div>
-          <div className='text-slate-500 text-xs'>Live client context and latest backend state</div>
+          <div className='text-slate-500 text-xs'>Live context, streamed execution steps, and LLM deductions</div>
         </div>
       </div>
       <div className='flex-1 space-y-3 overflow-y-auto p-3'>
@@ -720,6 +782,39 @@ function GraphAgentDebugPanel(props: {
               <DebugCode value={lastPayload} />
             ) : (
               <span className='text-slate-500'>No request has been sent in this session yet.</span>
+            )
+          }
+        />
+        <DebugSection
+          title='Processing Steps'
+          tone={latestDebugSteps.some((step) => step.status === 'warning') ? 'amber' : latestDebugSteps.length > 0 ? 'emerald' : 'slate'}
+          value={
+            latestDebugSteps.length > 0 ? (
+              <div className='space-y-2'>
+                {latestDebugSteps.map((step) => (
+                  <GraphDebugStepCard key={step.id} step={step} />
+                ))}
+              </div>
+            ) : (
+              <span className='text-slate-500'>No streamed backend debug steps received yet.</span>
+            )
+          }
+        />
+        <DebugSection
+          title='LLM Deductions'
+          tone={llmDeductions.length > 0 ? 'emerald' : 'slate'}
+          value={
+            llmDeductions.length > 0 ? (
+              <div className='space-y-2'>
+                {llmDeductions.map((item) => (
+                  <div key={item.id} className='rounded-md border border-sky-200 bg-sky-50 p-2'>
+                    <div className='font-medium text-sky-900 text-xs uppercase tracking-wide'>{item.stage}</div>
+                    <div className='mt-1 text-sky-950 text-sm'>{item.deduction}</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <span className='text-slate-500'>No LLM-assisted deductions were emitted for the latest response.</span>
             )
           }
         />
@@ -964,6 +1059,17 @@ export function KGChat({ onChatOpen, children }: KGChatProps) {
       }
     }
     return null;
+  }, [messages]);
+  const latestDebugSteps = React.useMemo(() => {
+    const latestAssistantMessage = [...messages]
+      .reverse()
+      .find((message) => message.role === 'assistant' && message.parts.some((part) => isGraphDebugPart(part)));
+
+    if (!latestAssistantMessage) {
+      return [];
+    }
+
+    return latestAssistantMessage.parts.flatMap((part) => (isGraphDebugPart(part) ? part.data : []));
   }, [messages]);
   const latestGraphState = React.useMemo(() => {
     for (const message of [...messages].reverse()) {
@@ -1259,6 +1365,8 @@ export function KGChat({ onChatOpen, children }: KGChatProps) {
                       return null;
                     case 'data-graphActions':
                       return null;
+                    case 'data-graphDebug':
+                      return null;
                     case 'data-graphState':
                       if (!isGraphStatePart(part)) {
                         return null;
@@ -1403,6 +1511,7 @@ export function KGChat({ onChatOpen, children }: KGChatProps) {
         liveContext={liveContext}
         lastPayload={lastDebugPayload}
         latestEvidence={latestEvidence}
+        latestDebugSteps={latestDebugSteps}
         latestGraphState={latestGraphState}
         status={status}
       />

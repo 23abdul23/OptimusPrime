@@ -1,12 +1,177 @@
 import { Injectable } from '@nestjs/common';
-import type { GraphContextResult, QueryIntentClassification, QueryRoute } from './graph-agent.types';
+import { z } from 'zod';
+import type { ModelId } from '@/llm/model.constants';
+import type {
+  ExtractedQuery,
+  GraphContextResult,
+  QueryDecomposition,
+  QueryIntentClassification,
+  QueryRoute,
+} from './graph-agent.types';
+import { GraphAgentLlmService } from './graph-agent-llm.service';
+
+const HYBRID_INTENT_PRIMARY_VALUES = [
+  'graph-discovery',
+  'graph-summary',
+  'schema-analysis',
+  'graph-relationship-analysis',
+  'ontology-analysis',
+  'enrichment-analysis',
+  'network-statistics',
+  'community-detection',
+  'exposure-analysis',
+  'drug-discovery',
+  'graph-explanation',
+  'graph-comparison',
+  'graph-commonality',
+  'graph-connections',
+  'relationship-analysis',
+  'drug-search',
+  'pathway-search',
+  'guideline-search',
+  'entity-neighborhood',
+  'network-summary',
+  'graph-expansion',
+  'comparison',
+  'disease-genes',
+] as const;
+
+const HYBRID_INTENT_OPERATION_VALUES = [
+  'graph-discovery',
+  'graph-summary',
+  'schema-analysis',
+  'graph-relationship-analysis',
+  'ontology-analysis',
+  'enrichment-analysis',
+  'network-statistics',
+  'community-detection',
+  'exposure-analysis',
+  'drug-discovery',
+  'graph-explanation',
+  'graph-comparison',
+  'graph-commonality',
+  'graph-connections',
+  'relationship-analysis',
+  'path-search',
+  'entity-search',
+  'drug-search',
+  'drug-indications',
+  'pathway-search',
+  'guideline-search',
+  'graph-expansion',
+  'neighborhood',
+  'comparison',
+  'network-summary',
+  'guarded-cypher',
+] as const;
+
+const HYBRID_REQUESTED_ENTITY_TYPES = [
+  'Gene',
+  'Protein',
+  'Disease',
+  'Drug',
+  'Pathway',
+  'Phenotype',
+  'Guideline',
+  'Exposure',
+  'Anatomy',
+  'BiologicalProcess',
+  'MolecularFunction',
+  'CellularComponent',
+] as const;
+
+const HYBRID_INTENT_SCHEMA = z.object({
+  primary: z.enum(HYBRID_INTENT_PRIMARY_VALUES),
+  operation: z.enum(HYBRID_INTENT_OPERATION_VALUES),
+  requestedEntityTypes: z.array(z.enum(HYBRID_REQUESTED_ENTITY_TYPES)).max(8),
+  allowContextFallback: z.boolean(),
+});
 
 @Injectable()
 export class IntentAgentService {
-  classify(params: {
+  constructor(private readonly graphAgentLlmService: GraphAgentLlmService) {}
+
+  async classify(params: {
     query: string;
     queryRoute: QueryRoute;
     graphContext: GraphContextResult;
+    extractedQuery?: ExtractedQuery;
+    decomposition?: QueryDecomposition;
+    model?: ModelId;
+  }): Promise<QueryIntentClassification> {
+    const deterministic = this.classifyDeterministic(params);
+    const constraints = [
+      ...(params.extractedQuery?.constraints ?? []),
+      ...(params.decomposition?.constraints ?? []),
+    ];
+    const requestedOutputs = [
+      ...(params.extractedQuery?.requestedOutputs ?? []),
+      ...(params.decomposition?.outputs ?? []),
+    ];
+
+    if (!this.shouldUseLlm(params.query, params.queryRoute, params.extractedQuery, params.decomposition)) {
+      return {
+        ...deterministic,
+        constraints: this.deduplicateValues(constraints),
+        requestedOutputs: this.deduplicateValues(requestedOutputs),
+        llmAssisted: false,
+      };
+    }
+
+    const llmClassification = await this.graphAgentLlmService.generateStructuredObject({
+      schema: HYBRID_INTENT_SCHEMA,
+      model: params.model,
+      functionId: 'graph-agent-intent-classification',
+      temperature: 0,
+      maxOutputTokens: 450,
+      system: [
+        'You classify biomedical graph questions for a typed graph agent.',
+        'Choose the single best primary intent and operation from the allowed enum values.',
+        'Prefer drug-discovery for therapeutic questions, path-search for mechanistic multi-hop connection questions, and enrichment-analysis for shared functional questions.',
+        'Do not invent graph facts or entities.',
+      ].join(' '),
+      prompt: [
+        `Query: ${params.query}`,
+        `Deterministic guess: primary=${deterministic.primary}, operation=${deterministic.operation}`,
+        `Route category: ${params.queryRoute.category}`,
+        `Graph scope: ${params.graphContext.graphScope.mode}`,
+        `Decomposition summary: ${params.decomposition?.summary ?? 'none'}`,
+        `Decomposition tasks: ${params.decomposition?.tasks.join(' | ') || 'none'}`,
+        `Requested outputs: ${requestedOutputs.join(', ') || 'none'}`,
+      ].join('\n'),
+    });
+
+    if (!llmClassification) {
+      return {
+        ...deterministic,
+        constraints: this.deduplicateValues(constraints),
+        requestedOutputs: this.deduplicateValues(requestedOutputs),
+        llmAssisted: false,
+      };
+    }
+
+    return {
+      primary: llmClassification.primary,
+      operation: llmClassification.operation,
+      requestedEntityTypes:
+        llmClassification.requestedEntityTypes.length > 0
+          ? llmClassification.requestedEntityTypes
+          : deterministic.requestedEntityTypes,
+      allowContextFallback: llmClassification.allowContextFallback,
+      radius: deterministic.radius,
+      constraints: this.deduplicateValues(constraints),
+      requestedOutputs: this.deduplicateValues(requestedOutputs),
+      llmAssisted: true,
+    };
+  }
+
+  private classifyDeterministic(params: {
+    query: string;
+    queryRoute: QueryRoute;
+    graphContext: GraphContextResult;
+    extractedQuery?: ExtractedQuery;
+    decomposition?: QueryDecomposition;
+    model?: ModelId;
   }): QueryIntentClassification {
     const { query, queryRoute, graphContext } = params;
     const normalized = query.toLowerCase();
@@ -331,6 +496,42 @@ export class IntentAgentService {
       allowContextFallback: true,
       radius,
     };
+  }
+
+  private shouldUseLlm(
+    query: string,
+    queryRoute: QueryRoute,
+    extractedQuery: ExtractedQuery | undefined,
+    decomposition: QueryDecomposition | undefined,
+  ) {
+    const normalized = query.trim().toLowerCase();
+    const tokens = normalized.split(/\s+/).filter((token) => token.length > 0);
+    const hasConstraintSignal =
+      (extractedQuery?.constraints.length ?? 0) > 0 ||
+      (decomposition?.constraints.length ?? 0) > 0 ||
+      /\bfda-approved\b|\bapproved\b|\bshared\b|\bcommon\b|\bmost affected\b|\bthrough which\b/i.test(
+        query,
+      );
+    const hasMultiStepSignal =
+      Boolean(decomposition?.requiresMultiHop) ||
+      (decomposition?.tasks.length ?? 0) >= 3 ||
+      /\btarget\b.*\bpathway\b|\bproteins?\b.*\bdrugs?\b|\bcompare\b.*\bshared\b|\bidentify\b.*\bshow\b/i.test(
+        query,
+      );
+
+    return (
+      tokens.length >= 10 ||
+      hasConstraintSignal ||
+      hasMultiStepSignal ||
+      queryRoute.category === 'MIXED_QUERY' ||
+      queryRoute.category === 'GRAPH_DISCOVERY_QUERY'
+    );
+  }
+
+  private deduplicateValues(values: string[]) {
+    return Array.from(
+      new Set(values.map((value) => value.trim()).filter((value) => value.length > 0)),
+    );
   }
 
   private inferRequestedEntityTypes(normalizedQuery: string) {

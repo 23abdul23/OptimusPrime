@@ -5,7 +5,7 @@ WORKDIR /app
 ARG GIT_BRANCH=tbepv2
 ARG NEXT_PUBLIC_BACKEND_URL=http://localhost:4500
 ARG NEXT_PUBLIC_LLM_BACKEND_URL=http://localhost:4500/llm
-ARG NEXT_PUBLIC_SITE_URL=http://localhost:3500
+ARG NEXT_PUBLIC_SITE_URL=http://localhost:4000
 ARG NEXT_PUBLIC_GRAPH_AGENT_DEBUG=true
 ARG AUTH_MAP=user1=password1;user2=password2
 

@@ -5,6 +5,7 @@ import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis'
 import Redis from 'ioredis';
 import { OptimusKgModule } from '@/optimuskg/optimuskg.module';
 import { ThrottlerBehindProxyGuard } from '@/llm/llm-throttle.guard';
+import { ClarificationAgentService } from './clarification-agent.service';
 import { ConversationGraphStateService } from './conversation-graph-state.service';
 import { EvidenceAgentService } from './evidence-agent.service';
 import { EntityExtractionService } from './entity-extraction.service';
@@ -12,11 +13,14 @@ import { EntityResolutionAgentService } from './entity-resolution-agent.service'
 import { CypherAgentService } from './cypher-agent.service';
 import { GraphAnalysisService } from './graph-analysis.service';
 import { GraphContextAgentService } from './graph-context-agent.service';
+import { GraphAgentLlmService } from './graph-agent-llm.service';
 import { GraphAgentController } from './graph-agent.controller';
 import { GraphAgentService } from './graph-agent.service';
+import { GraphInterpretationService } from './graph-interpretation.service';
 import { GraphRetrieverService } from './graph-retriever.service';
 import { IntentAgentService } from './intent-agent.service';
 import { QueryRouterService } from './query-router.service';
+import { QueryDecompositionAgentService } from './query-decomposition-agent.service';
 import { ReasoningAgentService } from './reasoning-agent.service';
 import { ReplanningAgentService } from './replanning-agent.service';
 import { RetrievalOperationsService } from './retrieval-operations.service';
@@ -55,16 +59,20 @@ import { RetrievalPlanningAgentService } from './retrieval-planning-agent.servic
   controllers: [GraphAgentController],
   providers: [
     ThrottlerBehindProxyGuard,
+    ClarificationAgentService,
     ConversationGraphStateService,
+    GraphAgentLlmService,
     GraphContextAgentService,
     EntityExtractionService,
     IntentAgentService,
     EntityResolutionAgentService,
     QueryRouterService,
+    QueryDecompositionAgentService,
     RetrievalPlanningAgentService,
     RetrievalOperationsService,
     CypherAgentService,
     GraphAnalysisService,
+    GraphInterpretationService,
     GraphRetrieverService,
     EvidenceAgentService,
     ReplanningAgentService,

@@ -50,7 +50,7 @@ export class RetrievalPlanningAgentService {
       new Set([primary?.id, secondary?.id].filter((nodeId): nodeId is string => Boolean(nodeId))),
     );
     const expansionSeedNodeIds = this.pickExpansionSeeds(resolvedEntities, primary, state, graphContext);
-    const expansionNodeTypes = this.pickExpansionNodeTypes(query, intent, resolvedEntities);
+    const expansionNodeTypes = this.pickExpansionNodeTypes(query, intent, resolvedEntities, extractedQuery);
     const graphNodeIds = seedEntities.map((entity) => entity.id).slice(0, 120);
     const mixedGraphNodeIds = Array.from(
       new Set(
@@ -149,7 +149,7 @@ export class RetrievalPlanningAgentService {
               aggregateMode,
               minSupport: this.pickMinimumSupport(discoveryEntities.length, aggregateMode),
               relationshipTypes: this.pickRelationshipTypes(query, intent, extractedQuery),
-              nodeTypes: this.pickExpansionNodeTypes(query, intent, discoveryEntities),
+              nodeTypes: this.pickExpansionNodeTypes(query, intent, discoveryEntities, extractedQuery),
               maxNodes: this.pickDiscoveryMaxNodes(query, discoveryEntities),
               hops: discoveryOperation.operation === 'discover-graph' ? 1 : 2,
               limit: 20,
@@ -1685,9 +1685,18 @@ export class RetrievalPlanningAgentService {
     ).slice(0, 5) as string[];
   }
 
-  private pickExpansionNodeTypes(query: string, intent: QueryIntentClassification, resolvedEntities: ResolvedEntity[]) {
+  private pickExpansionNodeTypes(
+    query: string,
+    intent: QueryIntentClassification,
+    resolvedEntities: ResolvedEntity[],
+    extractedQuery?: ExtractedQuery,
+  ) {
     const normalized = query.toLowerCase();
     const nodeTypes = new Set<string>(intent.requestedEntityTypes);
+    const requestedOutputs = [
+      ...(intent.requestedOutputs ?? []),
+      ...(extractedQuery?.requestedOutputs ?? []),
+    ].map((value) => value.toLowerCase());
 
     for (const entity of resolvedEntities) {
       if (entity.typeName) {
@@ -1710,6 +1719,25 @@ export class RetrievalPlanningAgentService {
     if (normalized.includes('disease') || normalized.includes('alzheimer') || normalized.includes('dementia')) {
       nodeTypes.add('Disease');
     }
+    if (requestedOutputs.some((value) => value.includes('drug'))) {
+      nodeTypes.add('Drug');
+    }
+    if (requestedOutputs.some((value) => value.includes('pathway') || value.includes('process'))) {
+      nodeTypes.add('Pathway');
+      nodeTypes.add('BiologicalProcess');
+    }
+    if (requestedOutputs.some((value) => value.includes('protein'))) {
+      nodeTypes.add('Protein');
+    }
+    if (requestedOutputs.some((value) => value.includes('gene'))) {
+      nodeTypes.add('Gene');
+    }
+    if (requestedOutputs.some((value) => value.includes('disease'))) {
+      nodeTypes.add('Disease');
+    }
+    if (requestedOutputs.some((value) => value.includes('exposure'))) {
+      nodeTypes.add('Exposure');
+    }
 
     return [...nodeTypes].slice(0, 8);
   }
@@ -1717,6 +1745,14 @@ export class RetrievalPlanningAgentService {
   private pickRelationshipTypes(query: string, intent: QueryIntentClassification, extractedQuery: ExtractedQuery) {
     const normalized = query.toLowerCase();
     const relationshipTypes = new Set<string>();
+    const constraints = [
+      ...(intent.constraints ?? []),
+      ...extractedQuery.constraints,
+    ].map((value) => value.toLowerCase());
+    const requestedOutputs = [
+      ...(intent.requestedOutputs ?? []),
+      ...extractedQuery.requestedOutputs,
+    ].map((value) => value.toLowerCase());
 
     if (intent.operation === 'drug-search') {
       ['TARGETS', 'TARGET_OF', 'ASSOCIATED_WITH', 'TREATS', 'INDICATED_FOR'].forEach((type) =>
@@ -1740,6 +1776,23 @@ export class RetrievalPlanningAgentService {
       ['TARGETS', 'TARGET_OF', 'INTERACTS_WITH', 'ASSOCIATED_WITH'].forEach((type) =>
         relationshipTypes.add(type),
       );
+    }
+    if (
+      normalized.includes('approved') ||
+      constraints.some((value) => value.includes('approved') || value.includes('fda'))
+    ) {
+      ['APPROVED_FOR', 'INDICATED_FOR', 'TREATS', 'HAS_INDICATION'].forEach((type) =>
+        relationshipTypes.add(type),
+      );
+    }
+    if (requestedOutputs.some((value) => value.includes('pathway') || value.includes('process'))) {
+      ['PARTICIPATES_IN', 'INVOLVED_IN', 'PART_OF'].forEach((type) => relationshipTypes.add(type));
+    }
+    if (requestedOutputs.some((value) => value.includes('drug'))) {
+      ['TARGETS', 'TARGET_OF', 'TREATS', 'INDICATED_FOR'].forEach((type) => relationshipTypes.add(type));
+    }
+    if (requestedOutputs.some((value) => value.includes('exposure'))) {
+      ['AFFECTS', 'CAUSES', 'ASSOCIATED_WITH'].forEach((type) => relationshipTypes.add(type));
     }
 
     if (

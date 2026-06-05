@@ -91,6 +91,9 @@ export interface QueryIntentClassification {
   requestedEntityTypes: string[];
   allowContextFallback: boolean;
   radius?: number;
+  constraints?: string[];
+  requestedOutputs?: string[];
+  llmAssisted?: boolean;
 }
 
 export type QueryCategory =
@@ -143,6 +146,11 @@ export interface ExtractedQuery {
   concepts: ExtractedConcept[];
   selectionReferences: string[];
   operatorSignals: string[];
+  constraints: string[];
+  requestedOutputs: string[];
+  semanticOperations: string[];
+  decomposition?: QueryDecomposition;
+  llmAssisted?: boolean;
 }
 
 export interface ResolvedEntity {
@@ -207,6 +215,55 @@ export interface GraphContextResult {
   graphReferences: GraphReferenceResolution;
   selectedNodeTypes: string[];
   selectedEdgeTypes: string[];
+}
+
+export interface QueryDecomposition {
+  summary: string;
+  tasks: string[];
+  constraints: string[];
+  outputs: string[];
+  traversalHints: string[];
+  requiresMultiHop: boolean;
+  source: 'llm';
+}
+
+export interface GraphInterpretation {
+  theme: string;
+  dominantConcepts: string[];
+  dominantRelationships: string[];
+  networkType: string;
+  summary: string;
+}
+
+export type GraphDebugStage =
+  | 'clarification'
+  | 'routing'
+  | 'graph-context'
+  | 'decomposition'
+  | 'extraction'
+  | 'intent'
+  | 'resolution'
+  | 'planning'
+  | 'retrieval'
+  | 'replanning'
+  | 'interpretation'
+  | 'answer';
+
+export type GraphDebugStatus = 'info' | 'success' | 'warning';
+
+export interface GraphDebugStep {
+  id: string;
+  stage: GraphDebugStage;
+  title: string;
+  summary: string;
+  status: GraphDebugStatus;
+  createdAt: string;
+  details?: Record<string, unknown>;
+  llm?: {
+    used: boolean;
+    mode: 'direct' | 'assisted';
+    deductions: string[];
+  };
 }
 
 export type RetrievalExecutor =
@@ -524,6 +581,7 @@ export interface GraphAgentDataParts {
   [key: string]: unknown;
   graphEvidence: GraphEvidenceBundle;
   graphActions: GraphAction[];
+  graphDebug: GraphDebugStep[];
   graphState: {
     sessionId: string;
     state: ConversationGraphState;

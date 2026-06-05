@@ -85,6 +85,37 @@ export interface GraphEvidenceBundle {
   assessment: GraphEvidenceAssessment;
 }
 
+export type GraphDebugStage =
+  | 'clarification'
+  | 'routing'
+  | 'graph-context'
+  | 'decomposition'
+  | 'extraction'
+  | 'intent'
+  | 'resolution'
+  | 'planning'
+  | 'retrieval'
+  | 'replanning'
+  | 'interpretation'
+  | 'answer';
+
+export type GraphDebugStatus = 'info' | 'success' | 'warning';
+
+export interface GraphDebugStep {
+  id: string;
+  stage: GraphDebugStage;
+  title: string;
+  summary: string;
+  status: GraphDebugStatus;
+  createdAt: string;
+  details?: Record<string, unknown>;
+  llm?: {
+    used: boolean;
+    mode: 'direct' | 'assisted';
+    deductions: string[];
+  };
+}
+
 export interface ConversationGraphState {
   sessionId: string;
   activeEntities: ResolvedEntity[];
@@ -125,6 +156,7 @@ export interface GraphAgentDataParts {
   [key: string]: unknown;
   graphEvidence: GraphEvidenceBundle;
   graphActions: GraphAction[];
+  graphDebug: GraphDebugStep[];
   graphState: {
     sessionId: string;
     state: ConversationGraphState;

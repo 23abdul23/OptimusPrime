@@ -4,8 +4,8 @@ services:
     image: neo4j:5.26-community
     restart: 'always'
     ports:
-      - "${OPTIMUS_NEO4J_HTTP_PORT:-7974}:7474"
-      - "${OPTIMUS_NEO4J_BOLT_PORT:-8187}:7687"
+      - "${OPTIMUS_NEO4J_HTTP_PORT:-8474}:7474"
+      - "${OPTIMUS_NEO4J_BOLT_PORT:-8687}:7687"
     environment:
       - NEO4J_AUTH=${OPTIMUS_NEO4J_USERNAME:-neo4j}/${OPTIMUS_NEO4J_PASSWORD:-optimus-password}
     volumes:
@@ -20,13 +20,13 @@ services:
       args:
         NEXT_PUBLIC_BACKEND_URL: ${OPTIMUS_FRONTEND_BACKEND_URL:-http://localhost:${OPTIMUS_BACKEND_PORT:-4500}}
         NEXT_PUBLIC_LLM_BACKEND_URL: ${OPTIMUS_FRONTEND_LLM_BACKEND_URL:-http://localhost:${OPTIMUS_BACKEND_PORT:-4500}/llm}
-        NEXT_PUBLIC_SITE_URL: ${OPTIMUS_FRONTEND_SITE_URL:-http://localhost:${OPTIMUS_FRONTEND_PORT:-3500}}
+        NEXT_PUBLIC_SITE_URL: ${OPTIMUS_FRONTEND_SITE_URL:-http://localhost:${OPTIMUS_FRONTEND_PORT:-4000}}
         NEXT_PUBLIC_GRAPH_AGENT_DEBUG: ${OPTIMUS_FRONTEND_GRAPH_AGENT_DEBUG:-true}
         AUTH_MAP: ${OPTIMUS_FRONTEND_AUTH_MAP:-user1=password1;user2=password2}
     image: ghcr.io/mizzoudbl/tbep-frontend
     restart: 'always'
     ports:
-      - "${OPTIMUS_FRONTEND_PORT:-3500}:80"
+      - "${OPTIMUS_FRONTEND_PORT:-4000}:80"
 
   
   nestjs:

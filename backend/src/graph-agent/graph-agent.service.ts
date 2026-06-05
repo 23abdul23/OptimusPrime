@@ -1,17 +1,20 @@
 import { Injectable } from '@nestjs/common';
 import { createUIMessageStream, type UIMessageStreamWriter } from 'ai';
 import { DEFAULT_MODEL, type ModelId } from '@/llm/model.constants';
+import { ClarificationAgentService } from './clarification-agent.service';
 import { ConversationGraphStateService } from './conversation-graph-state.service';
 import { EntityExtractionService } from './entity-extraction.service';
 import { EntityResolutionAgentService } from './entity-resolution-agent.service';
 import { EvidenceAgentService } from './evidence-agent.service';
 import { GraphContextAgentService } from './graph-context-agent.service';
+import { GraphInterpretationService } from './graph-interpretation.service';
 import { GraphRetrieverService } from './graph-retriever.service';
 import type { GraphAgentChatRequestDto } from './graph-agent.dto';
 import type {
   ConversationGraphState,
   GraphAction,
   GraphAgentUIMessage,
+  GraphDebugStep,
   ExtractedQuery,
   GraphEvidenceItem,
   GraphNetworkContext,
@@ -28,6 +31,7 @@ import { ReasoningAgentService } from './reasoning-agent.service';
 import { RetrievalPlanningAgentService } from './retrieval-planning-agent.service';
 import type { GraphEvidenceBundle, RetrievalPlanStep } from './graph-agent.types';
 import { QueryRouterService } from './query-router.service';
+import { QueryDecompositionAgentService } from './query-decomposition-agent.service';
 import { ReplanningAgentService } from './replanning-agent.service';
 
 const MAX_REPLAN_ATTEMPTS = 2;
@@ -35,16 +39,19 @@ const MAX_REPLAN_ATTEMPTS = 2;
 @Injectable()
 export class GraphAgentService {
   constructor(
+    private readonly clarificationAgentService: ClarificationAgentService,
     private readonly conversationStateService: ConversationGraphStateService,
     private readonly graphContextAgentService: GraphContextAgentService,
     private readonly entityExtractionService: EntityExtractionService,
     private readonly intentAgentService: IntentAgentService,
     private readonly entityResolutionAgentService: EntityResolutionAgentService,
     private readonly queryRouterService: QueryRouterService,
+    private readonly queryDecompositionAgentService: QueryDecompositionAgentService,
     private readonly retrievalPlanningAgentService: RetrievalPlanningAgentService,
     private readonly graphRetrieverService: GraphRetrieverService,
     private readonly evidenceAgentService: EvidenceAgentService,
     private readonly replanningAgentService: ReplanningAgentService,
+    private readonly graphInterpretationService: GraphInterpretationService,
     private readonly reasoningAgentService: ReasoningAgentService,
   ) {}
 
@@ -62,15 +69,32 @@ export class GraphAgentService {
         }
 
         const responseId = `${sessionId}-${Date.now()}`;
+        const model = (promptDto.model as ModelId | undefined) ?? DEFAULT_MODEL;
 
         const previousState = await this.conversationStateService.getConversationGraphState(sessionId);
-        const clarificationResolution = this.resolvePendingClarification(
+        const clarificationResolution = await this.resolvePendingClarification(
           previousState.pendingClarification,
           query,
+          model,
         );
 
         if (previousState.pendingClarification && !clarificationResolution) {
           const pendingClarification = previousState.pendingClarification;
+          this.writeDebugStep(writer, {
+            stage: 'clarification',
+            title: 'Pending clarification still blocks execution',
+            status: 'warning',
+            summary: `The query cannot continue until "${pendingClarification.unresolvedEntity}" is resolved.`,
+            details: {
+              originalQuery: pendingClarification.originalQuery,
+              unresolvedEntity: pendingClarification.unresolvedEntity,
+              candidateEntities: pendingClarification.candidateEntities.map((candidate) => ({
+                id: candidate.id,
+                displayName: candidate.displayName,
+                typeName: candidate.typeName,
+              })),
+            },
+          });
           const evidenceBundle = this.evidenceAgentService.buildBundle({
             query: pendingClarification.originalQuery,
             items: [
@@ -146,11 +170,41 @@ export class GraphAgentService {
         }
 
         const effectiveQuery = clarificationResolution?.originalQuery ?? query;
+        if (clarificationResolution) {
+          this.writeDebugStep(writer, {
+            stage: 'clarification',
+            title: 'Pending clarification resolved',
+            status: 'success',
+            summary: `Resumed the prior request after resolving "${previousState.pendingClarification?.unresolvedEntity ?? 'the pending entity'}".`,
+            details: {
+              originalQuery: clarificationResolution.originalQuery,
+              resolvedEntities: clarificationResolution.resolvedEntities.map((entity) => ({
+                id: entity.id,
+                displayName: entity.displayName,
+                typeName: entity.typeName,
+                confidence: entity.confidence,
+              })),
+            },
+          });
+        }
         const queryRoute = clarificationResolution?.queryRoute ?? this.queryRouterService.route({
           query: effectiveQuery,
           selectedNodeContext: promptDto.selectedNodeContext ?? [],
           selectedEdgeContext: promptDto.selectedEdgeContext ?? [],
           networkContext: promptDto.networkContext,
+        });
+        this.writeDebugStep(writer, {
+          stage: 'routing',
+          title: 'Query routed',
+          status: 'success',
+          summary: `Classified as ${queryRoute.category} with ${queryRoute.intent} intent via ${queryRoute.preferredExecutor}.`,
+          details: {
+            category: queryRoute.category,
+            intent: queryRoute.intent,
+            preferredExecutor: queryRoute.preferredExecutor,
+            reasons: queryRoute.reasons,
+            signals: queryRoute.signals,
+          },
         });
         const graphContext = this.graphContextAgentService.build({
           query: effectiveQuery,
@@ -160,17 +214,133 @@ export class GraphAgentService {
           networkContext: promptDto.networkContext,
           state: previousState,
         });
+        this.writeDebugStep(writer, {
+          stage: 'graph-context',
+          title: 'Graph context assembled',
+          status: 'success',
+          summary: `Using ${graphContext.graphScope.mode} scope with ${graphContext.activeAnchors.length} active anchor${graphContext.activeAnchors.length === 1 ? '' : 's'}.`,
+          details: {
+            graphScope: graphContext.graphScope,
+            graphReferences: graphContext.graphReferences,
+            activeAnchors: graphContext.activeAnchors,
+            selectedNodeTypes: graphContext.selectedNodeTypes,
+            selectedEdgeTypes: graphContext.selectedEdgeTypes,
+          },
+        });
         const isDiscoveryMode =
           queryRoute.category === 'GRAPH_DISCOVERY_QUERY' || graphContext.graphScope.mode === 'discovery';
+        const queryDecomposition = clarificationResolution
+          ? clarificationResolution.extractedQuery.decomposition
+          : await this.queryDecompositionAgentService.decompose({
+              query: effectiveQuery,
+              queryRoute,
+              graphContext,
+              model,
+            });
+        this.writeDebugStep(writer, {
+          stage: 'decomposition',
+          title: queryDecomposition ? 'LLM query decomposition generated' : 'No decomposition needed',
+          status: queryDecomposition ? 'success' : 'info',
+          summary: queryDecomposition
+            ? `Split the query into ${queryDecomposition.tasks.length} task${queryDecomposition.tasks.length === 1 ? '' : 's'} for downstream planning.`
+            : 'The query is simple enough to skip a separate decomposition phase.',
+          details: queryDecomposition
+            ? {
+                summary: queryDecomposition.summary,
+                tasks: queryDecomposition.tasks,
+                constraints: queryDecomposition.constraints,
+                outputs: queryDecomposition.outputs,
+                traversalHints: queryDecomposition.traversalHints,
+                requiresMultiHop: queryDecomposition.requiresMultiHop,
+              }
+            : undefined,
+          llm: queryDecomposition
+            ? {
+                used: true,
+                mode: 'direct',
+                deductions: [
+                  queryDecomposition.summary,
+                  ...queryDecomposition.tasks,
+                  ...queryDecomposition.constraints,
+                  ...queryDecomposition.outputs,
+                ].filter((value) => value.trim().length > 0),
+              }
+            : undefined,
+        });
         const extractedQuery = clarificationResolution?.extractedQuery
           ? clarificationResolution.extractedQuery
           : queryRoute.requiresEntityExtraction
-            ? this.entityExtractionService.extractQuery({ query: effectiveQuery })
-            : this.createEmptyExtractedQuery(effectiveQuery);
-        const intent = clarificationResolution?.intent ?? this.intentAgentService.classify({
-          query: effectiveQuery,
-          queryRoute,
-          graphContext,
+            ? await this.entityExtractionService.extractQuery({
+                query: effectiveQuery,
+                queryRoute,
+                decomposition: queryDecomposition,
+                model,
+              })
+            : this.createEmptyExtractedQuery(effectiveQuery, queryDecomposition);
+        this.writeDebugStep(writer, {
+          stage: 'extraction',
+          title: extractedQuery.llmAssisted ? 'Hybrid extraction completed' : 'Deterministic extraction completed',
+          status: 'success',
+          summary: `Captured ${extractedQuery.mentions.length} mention${extractedQuery.mentions.length === 1 ? '' : 's'} and ${extractedQuery.concepts.length} concept${extractedQuery.concepts.length === 1 ? '' : 's'}.`,
+          details: {
+            mentions: extractedQuery.mentions,
+            concepts: extractedQuery.concepts,
+            selectionReferences: extractedQuery.selectionReferences,
+            operatorSignals: extractedQuery.operatorSignals,
+            constraints: extractedQuery.constraints,
+            requestedOutputs: extractedQuery.requestedOutputs,
+            semanticOperations: extractedQuery.semanticOperations,
+          },
+          llm: extractedQuery.llmAssisted
+            ? {
+                used: true,
+                mode: 'assisted',
+                deductions: [
+                  ...extractedQuery.mentions.map((mention) => `Explicit mention: ${mention.text}`),
+                  ...extractedQuery.concepts.map((concept) => `Concept: ${concept.text}`),
+                  ...extractedQuery.constraints.map((constraint) => `Constraint: ${constraint}`),
+                  ...extractedQuery.requestedOutputs.map((output) => `Requested output: ${output}`),
+                ],
+              }
+            : undefined,
+        });
+        const intent =
+          clarificationResolution?.intent ??
+          (await this.intentAgentService.classify({
+            query: effectiveQuery,
+            queryRoute,
+            graphContext,
+            extractedQuery,
+            decomposition: queryDecomposition,
+            model,
+          }));
+        this.writeDebugStep(writer, {
+          stage: 'intent',
+          title: intent.llmAssisted ? 'Hybrid intent classification completed' : 'Deterministic intent classification completed',
+          status: 'success',
+          summary: `Selected ${intent.primary} / ${intent.operation} as the execution path.`,
+          details: {
+            primary: intent.primary,
+            operation: intent.operation,
+            requestedEntityTypes: intent.requestedEntityTypes,
+            allowContextFallback: intent.allowContextFallback,
+            radius: intent.radius,
+            constraints: intent.constraints,
+            requestedOutputs: intent.requestedOutputs,
+          },
+          llm: intent.llmAssisted
+            ? {
+                used: true,
+                mode: 'assisted',
+                deductions: [
+                  `Primary intent: ${intent.primary}`,
+                  `Operation: ${intent.operation}`,
+                  ...intent.requestedEntityTypes.map((type) => `Requested entity type: ${type}`),
+                  ...((intent.constraints ?? []).map((constraint) => `Constraint: ${constraint}`)),
+                  ...((intent.requestedOutputs ?? []).map((output) => `Requested output: ${output}`)),
+                ],
+              }
+            : undefined,
         });
         const selectedEntities = this.buildSelectedContextEntities(graphContext.activeAnchors);
         const selectedEdgeEvidence = this.buildSelectedEdgeContextEvidence(
@@ -182,6 +352,17 @@ export class GraphAgentService {
         );
 
         if (intent.operation === 'network-summary' && promptDto.networkContext) {
+          this.writeDebugStep(writer, {
+            stage: 'answer',
+            title: 'Visible network shortcut selected',
+            status: 'success',
+            summary: 'Answered directly from the frontend-visible network context without backend retrieval.',
+            details: {
+              totalNodes: promptDto.networkContext.totalNodes,
+              totalEdges: promptDto.networkContext.totalEdges,
+              topNodeTypes: promptDto.networkContext.topNodeTypes ?? [],
+            },
+          });
           const evidenceBundle = this.evidenceAgentService.buildBundle({
             query: effectiveQuery,
             items: [
@@ -266,6 +447,15 @@ export class GraphAgentService {
           queryRoute.requiresEntityResolution &&
           localResolution.ambiguous.length > 0
         ) {
+          this.writeDebugStep(writer, {
+            stage: 'clarification',
+            title: 'Visible graph ambiguity detected',
+            status: 'warning',
+            summary: `Found ${localResolution.ambiguous.length} ambiguous visible-graph mention${localResolution.ambiguous.length === 1 ? '' : 's'} that require user confirmation.`,
+            details: {
+              ambiguities: localResolution.ambiguous,
+            },
+          });
           const evidenceBundle = this.evidenceAgentService.buildBundle({
             query: effectiveQuery,
             items: [
@@ -399,6 +589,22 @@ export class GraphAgentService {
           : queryRoute.requiresEntityResolution
             ? this.getUnresolvedMentionTexts(extractedQuery.mentions, resolvedQueryEntities)
             : [];
+        this.writeDebugStep(writer, {
+          stage: 'resolution',
+          title: 'Entity resolution completed',
+          status: unresolvedMentions.length > 0 ? 'warning' : 'success',
+          summary:
+            resolvedEntities.length > 0
+              ? `Resolved ${resolvedEntities.length} entity anchor${resolvedEntities.length === 1 ? '' : 's'}${unresolvedMentions.length > 0 ? `, with ${unresolvedMentions.length} unresolved mention${unresolvedMentions.length === 1 ? '' : 's'}` : ''}.`
+              : unresolvedMentions.length > 0
+                ? `No entities were resolved; ${unresolvedMentions.length} mention${unresolvedMentions.length === 1 ? '' : 's'} remain unresolved.`
+                : 'No explicit entity resolution was required for this request.',
+          details: {
+            locallyResolvedEntities: localResolution.resolvedEntities,
+            resolvedEntities,
+            unresolvedMentions,
+          },
+        });
 
         if (isDiscoveryMode) {
           const discoveryAssessment = this.assessDiscoveryQueryBroadness({
@@ -407,6 +613,16 @@ export class GraphAgentService {
             resolvedEntities,
           });
           if (discoveryAssessment.shouldClarify) {
+            this.writeDebugStep(writer, {
+              stage: 'clarification',
+              title: 'Discovery query is too broad',
+              status: 'warning',
+              summary: discoveryAssessment.summary,
+              details: {
+                reason: discoveryAssessment.reason,
+                suggestions: discoveryAssessment.suggestions,
+              },
+            });
             const evidenceBundle = this.evidenceAgentService.buildBundle({
               query: effectiveQuery,
               items: [
@@ -486,6 +702,15 @@ export class GraphAgentService {
 
           const discoveryAmbiguities = await this.findDiscoveryAmbiguities(extractedQuery, unresolvedMentions);
           if (discoveryAmbiguities.length > 0) {
+            this.writeDebugStep(writer, {
+              stage: 'clarification',
+              title: 'Discovery seed is ambiguous',
+              status: 'warning',
+              summary: `Found ${discoveryAmbiguities.length} ambiguous discovery seed mention${discoveryAmbiguities.length === 1 ? '' : 's'} in OptimusKG candidate lookup.`,
+              details: {
+                ambiguities: discoveryAmbiguities,
+              },
+            });
             const evidenceBundle = this.evidenceAgentService.buildBundle({
               query: effectiveQuery,
               items: discoveryAmbiguities.map((ambiguity, index) => ({
@@ -606,6 +831,17 @@ export class GraphAgentService {
           queryRoute.requiresEntityResolution &&
           this.shouldBlockOnUnresolvedMentions(extractedQuery.mentions.length, intent.operation, unresolvedMentions)
         ) {
+          this.writeDebugStep(writer, {
+            stage: 'resolution',
+            title: 'Execution blocked by unresolved mentions',
+            status: 'warning',
+            summary: `Retrieval was halted because ${unresolvedMentions.length} explicit mention${unresolvedMentions.length === 1 ? '' : 's'} could not be resolved confidently.`,
+            details: {
+              unresolvedMentions,
+              mentionCount: extractedQuery.mentions.length,
+              operation: intent.operation,
+            },
+          });
           const evidenceBundle = this.evidenceAgentService.buildBundle({
             query: effectiveQuery,
             items: selectedEdgeEvidence,
@@ -685,12 +921,45 @@ export class GraphAgentService {
         let evidenceBundle!: GraphEvidenceBundle;
         let currentPlanBatch = accumulatedPlan;
         let replanAttempts = 0;
+        this.writeDebugStep(writer, {
+          stage: 'planning',
+          title: 'Retrieval plan generated',
+          status: accumulatedPlan.length > 0 ? 'success' : 'warning',
+          summary:
+            accumulatedPlan.length > 0
+              ? `Built ${accumulatedPlan.length} retrieval step${accumulatedPlan.length === 1 ? '' : 's'} for execution.`
+              : 'No executable retrieval steps were generated for this request.',
+          details: {
+            intent,
+            requestedOutputs: extractedQuery.requestedOutputs,
+            constraints: extractedQuery.constraints,
+            resolvedEntities: resolvedEntities.map((entity) => ({
+              id: entity.id,
+              displayName: entity.displayName,
+              typeName: entity.typeName,
+            })),
+            plan: accumulatedPlan,
+          },
+        });
 
         while (currentPlanBatch.length > 0) {
           const retrieval = await this.graphRetrieverService.executePlan(currentPlanBatch, resolvedEntities);
           accumulatedEvidence.push(...retrieval.evidence);
           accumulatedWarnings.push(...retrieval.warnings);
           accumulatedGraphActions.push(...retrieval.graphActions);
+          this.writeDebugStep(writer, {
+            stage: 'retrieval',
+            title: 'Retrieval batch executed',
+            status: retrieval.evidence.length > 0 ? 'success' : 'warning',
+            summary: `Executed ${currentPlanBatch.length} plan step${currentPlanBatch.length === 1 ? '' : 's'} and collected ${retrieval.evidence.length} evidence item${retrieval.evidence.length === 1 ? '' : 's'}.`,
+            details: {
+              batchPlan: currentPlanBatch,
+              evidenceCount: retrieval.evidence.length,
+              warningCount: retrieval.warnings.length,
+              graphActionCount: retrieval.graphActions.length,
+              warnings: retrieval.warnings,
+            },
+          });
 
           evidenceBundle = this.evidenceAgentService.buildBundle({
             query: effectiveQuery,
@@ -723,6 +992,18 @@ export class GraphAgentService {
           }
 
           replanAttempts += 1;
+          this.writeDebugStep(writer, {
+            stage: 'replanning',
+            title: 'Additional retrieval planned',
+            status: 'info',
+            summary: `Evidence coverage was insufficient, so ${replan.length} follow-up retrieval step${replan.length === 1 ? '' : 's'} were added.`,
+            details: {
+              replanAttempts,
+              rationale: evidenceBundle.assessment.rationale,
+              matchedOperations: evidenceBundle.assessment.matchedOperations,
+              replan,
+            },
+          });
           accumulatedPlan = [...accumulatedPlan, ...replan];
           currentPlanBatch = replan;
         }
@@ -764,6 +1045,17 @@ export class GraphAgentService {
             visibleNodeIds: promptDto.networkContext.visibleNodeIds ?? previousState.visibleNodeIds,
             replanAttempts,
           });
+          this.writeDebugStep(writer, {
+            stage: 'retrieval',
+            title: 'Visible network fallback used',
+            status: 'warning',
+            summary: 'Backend graph-summary retrieval returned no evidence, so the answer fell back to the visible frontend network snapshot.',
+            details: {
+              totalNodes: promptDto.networkContext.totalNodes,
+              totalEdges: promptDto.networkContext.totalEdges,
+              topNodeTypes: promptDto.networkContext.topNodeTypes ?? [],
+            },
+          });
         }
 
         const nextState = await this.conversationStateService.saveConversationGraphState(
@@ -797,17 +1089,67 @@ export class GraphAgentService {
             state: nextState,
           },
         });
+        const graphInterpretation = this.graphInterpretationService.interpret({
+          evidence: evidenceBundle,
+          graphContext,
+          resolvedEntities,
+        });
+        this.writeDebugStep(writer, {
+          stage: 'interpretation',
+          title: 'Graph interpretation prepared',
+          status: 'success',
+          summary: graphInterpretation.summary,
+          details: {
+            interpretation: graphInterpretation,
+          },
+        });
 
         const synthesisStream = this.reasoningAgentService.streamAnswer({
-          model: (promptDto.model as ModelId | undefined) ?? DEFAULT_MODEL,
+          model,
           query: effectiveQuery,
           evidence: evidenceBundle,
           resolvedEntities,
           graphContext,
           graphActions: this.deduplicateGraphActions(accumulatedGraphActions),
+          graphInterpretation,
+        });
+        this.writeDebugStep(writer, {
+          stage: 'answer',
+          title: 'Final answer synthesis started',
+          status: 'success',
+          summary: `Streaming the grounded response from the reasoning model with ${evidenceBundle.items.length} evidence item${evidenceBundle.items.length === 1 ? '' : 's'}.`,
+          details: {
+            model,
+            confidence: evidenceBundle.confidence,
+            confidenceLabel: evidenceBundle.confidenceLabel,
+            warnings: evidenceBundle.warnings,
+            graphInterpretation,
+          },
+          llm: {
+            used: true,
+            mode: 'direct',
+            deductions: [
+              graphInterpretation.summary,
+              `Confidence: ${evidenceBundle.confidenceLabel}`,
+              ...graphInterpretation.dominantConcepts.map((concept) => `Dominant concept: ${concept}`),
+              ...graphInterpretation.dominantRelationships.map(
+                (relationship) => `Dominant relationship: ${relationship}`,
+              ),
+            ],
+          },
         });
 
         if (!synthesisStream) {
+          this.writeDebugStep(writer, {
+            stage: 'answer',
+            title: 'Reasoning model unavailable',
+            status: 'warning',
+            summary: 'Fell back to the deterministic answer template because the reasoning stream could not be created.',
+            details: {
+              model,
+              evidenceItemCount: evidenceBundle.items.length,
+            },
+          });
           this.writeText(
             writer,
             this.reasoningAgentService.createFallbackAnswer(effectiveQuery, evidenceBundle),
@@ -827,10 +1169,11 @@ export class GraphAgentService {
     });
   }
 
-  private resolvePendingClarification(
+  private async resolvePendingClarification(
     pendingClarification: PendingClarificationState | undefined,
     query: string,
-  ):
+    model?: ModelId,
+  ): Promise<
     | {
         originalQuery: string;
         queryRoute: QueryRoute;
@@ -838,12 +1181,17 @@ export class GraphAgentService {
         intent: QueryIntentClassification;
         resolvedEntities: ResolvedEntity[];
       }
-    | undefined {
+    | undefined
+  > {
     if (!pendingClarification) {
       return undefined;
     }
 
-    const selectedCandidates = this.selectClarificationCandidates(pendingClarification, query);
+    const selectedCandidates = await this.clarificationAgentService.selectCandidates({
+      pendingClarification,
+      query,
+      model,
+    });
     if (selectedCandidates.length === 0) {
       return undefined;
     }
@@ -873,82 +1221,15 @@ export class GraphAgentService {
         operation: pendingClarification.pendingOperation,
         requestedEntityTypes: [],
         allowContextFallback: true,
+        constraints: pendingClarification.extractedQuery.constraints,
+        requestedOutputs: pendingClarification.extractedQuery.requestedOutputs,
+        llmAssisted: pendingClarification.extractedQuery.llmAssisted ?? false,
       },
       resolvedEntities: this.mergeResolvedEntityLists(
         pendingClarification.resolvedEntities,
         selectedCandidates,
       ),
     };
-  }
-
-  private selectClarificationCandidates(
-    pendingClarification: PendingClarificationState,
-    query: string,
-  ) {
-    const normalizedQuery = query.trim().toLowerCase();
-    if (normalizedQuery.length === 0) {
-      return [];
-    }
-
-    if (
-      /^(all|all of them|use all|show everything|everything|all candidates|include all|all of those)$/i.test(
-        normalizedQuery,
-      )
-    ) {
-      return pendingClarification.candidateEntities;
-    }
-
-    const ordinalMatch =
-      normalizedQuery.match(/\b(first|1st|one|1)\b/) ??
-      normalizedQuery.match(/\b(second|2nd|two|2)\b/) ??
-      normalizedQuery.match(/\b(third|3rd|three|3)\b/) ??
-      normalizedQuery.match(/\b(fourth|4th|four|4)\b/);
-    if (ordinalMatch) {
-      const ordinalMap: Record<string, number> = {
-        first: 0,
-        '1st': 0,
-        one: 0,
-        '1': 0,
-        second: 1,
-        '2nd': 1,
-        two: 1,
-        '2': 1,
-        third: 2,
-        '3rd': 2,
-        three: 2,
-        '3': 2,
-        fourth: 3,
-        '4th': 3,
-        four: 3,
-        '4': 3,
-      };
-      const candidateIndex = ordinalMap[ordinalMatch[1].toLowerCase()];
-      const candidate = pendingClarification.candidateEntities[candidateIndex];
-      return candidate ? [candidate] : [];
-    }
-
-    return pendingClarification.candidateEntities.filter((candidate) =>
-      this.matchesClarificationCandidate(candidate, normalizedQuery),
-    );
-  }
-
-  private matchesClarificationCandidate(candidate: ResolvedEntity, normalizedQuery: string) {
-    const candidateTerms = new Set<string>();
-    candidateTerms.add(candidate.displayName.trim().toLowerCase());
-    candidateTerms.add(candidate.query.trim().toLowerCase());
-    candidate.matchedOn.forEach((term) => candidateTerms.add(term.trim().toLowerCase()));
-
-    for (const term of candidateTerms) {
-      if (!term) {
-        continue;
-      }
-
-      if (term === normalizedQuery || term.includes(normalizedQuery) || normalizedQuery.includes(term)) {
-        return true;
-      }
-    }
-
-    return false;
   }
 
   private mergeResolvedEntityLists(primary: ResolvedEntity[], secondary: ResolvedEntity[]) {
@@ -1062,13 +1343,48 @@ export class GraphAgentService {
     writer.write({ type: 'text-end', id });
   }
 
-  private createEmptyExtractedQuery(query: string): ExtractedQuery {
+  private writeDebugStep(
+    writer: UIMessageStreamWriter<GraphAgentUIMessage>,
+    step: Omit<GraphDebugStep, 'id' | 'createdAt'>,
+  ) {
+    writer.write({
+      type: 'data-graphDebug',
+      id: `graph-debug-${step.stage}-${Date.now()}`,
+      data: [
+        {
+          ...step,
+          id: `graph-debug-step-${step.stage}-${Date.now()}`,
+          createdAt: new Date().toISOString(),
+          llm: step.llm
+            ? {
+                ...step.llm,
+                deductions: Array.from(
+                  new Set(
+                    step.llm.deductions.map((value) => value.trim()).filter((value) => value.length > 0),
+                  ),
+                ),
+              }
+            : undefined,
+        },
+      ],
+    });
+  }
+
+  private createEmptyExtractedQuery(
+    query: string,
+    decomposition?: ExtractedQuery['decomposition'],
+  ): ExtractedQuery {
     return {
       query,
       mentions: [],
       concepts: [],
       selectionReferences: [],
       operatorSignals: [],
+      constraints: decomposition?.constraints ?? [],
+      requestedOutputs: decomposition?.outputs ?? [],
+      semanticOperations: decomposition?.tasks ?? [],
+      decomposition,
+      llmAssisted: false,
     };
   }
 
