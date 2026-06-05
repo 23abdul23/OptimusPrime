@@ -1,93 +1,146 @@
 # Current Architecture
 
-## Scope
-The OptimusKG graph agent is implemented as a single NestJS module with specialized services. It is not a free-form multi-agent runtime. It is a typed orchestrator that routes each query through graph-context resolution, intent classification, retrieval planning, graph execution, evidence assessment, optional replanning, and grounded answer synthesis.
+This folder now serves two jobs:
 
-## Runtime Shape
-- Frontend: Next.js knowledge-graph UI, Sigma graph canvas, chat window, selection state, visible-graph context, follow-up suggestions, answer-to-graph linking.
-- Backend: `GraphAgentModule` inside the main NestJS API.
-- Data stores: Neo4j for graph truth, Redis for session graph memory and caching.
-- LLM usage: limited to extraction/intention/reasoning boundaries; graph existence and graph facts come from OptimusKG and Neo4j.
+1. explain the current implementation accurately
+2. give you slide-ready architecture diagrams for presentations
 
-## Implemented Backend Services
-- `QueryRouterService`
-  Decides query category, graph-vs-entity strategy, whether extraction and resolution are required, and whether the request should enter empty-canvas graph discovery mode.
-- `GraphContextAgentService`
-  Resolves the active graph subject from selected graph, visible graph, or session graph.
-- `EntityExtractionService`
-  Extracts explicit mentions, concepts, selection references, and operator signals.
-- `IntentAgentService`
-  Classifies the request into operational intent families.
-- `EntityResolutionAgentService`
-  Resolves explicit mentions against OptimusKG metadata and aliases, and can surface candidate lists for discovery-time ambiguity clarification.
-- `RetrievalPlanningAgentService`
-  Emits typed plan steps with executor, operation, tool, and parameters, including composite graph-discovery network builders for empty sessions.
-- `GraphAnalysisService`
-  Primary executor for graph-wide analysis, visible-network analysis, selected-subgraph analysis, topology analysis, ontology traversal, enrichment, community detection, and graph explanation.
-- `RetrievalOperationsService`
-  Primary executor for entity-anchored typed retrieval operations, composite discovery-network builders, and guarded traversal helpers.
-- `CypherAgentService`
-  Validates and executes explicit read-only Cypher when the request is intentionally Cypher-oriented.
-- `GraphRetrieverService`
-  Runs the typed plan and merges evidence, graph deltas, graph actions, and warnings.
-- `EvidenceAgentService`
-  Scores the retrieved evidence, computes confidence, and decides whether replanning is needed.
-- `ReplanningAgentService`
-  Appends bounded follow-up plan steps when the first pass is insufficient.
-- `ReasoningAgentService`
-  Produces the final grounded response, follow-up suggestions, and UI-facing answer text.
-- `ConversationGraphStateService`
-  Persists per-session graph context in Redis.
+> Presentation note: the two Mermaid blocks in this file are the best "overall architecture" visuals for a PPT.
 
-## Execution Model
-1. Frontend sends:
-   - latest user message
-   - `selectedNodeContext`
-   - `selectedEdgeContext`
-   - `networkContext`
-2. Router classifies the request and decides whether extraction and resolution should run.
-3. Graph context agent determines the active graph subject with this priority:
-   - selected graph
-   - visible graph
-   - session graph
-   - discovery mode when no graph context exists
-4. Extraction and resolution run only when the router requires them.
-5. For empty-canvas requests, the orchestrator can stop early for:
-   - broad-query clarification
-   - ambiguous seed clarification
-6. Planner emits typed plan steps.
-7. Retriever executes those steps through one of:
-   - `graph-analysis`
-   - `retrieval-operations`
-   - `cypher-agent`
-8. Evidence agent bundles results and may request bounded replanning.
-9. Reasoning agent writes the answer and graph actions.
-10. Session graph state is updated in Redis.
+## System Overview
 
-## Current Query Families
-- Graph summary and graph explanation
-- Empty-canvas graph discovery and initial network generation
-- Schema analysis and node-type analysis
-- Relationship analysis and cross-type connection analysis
-- Network statistics and topology inspection
-- Community detection and module analysis
-- Ontology traversal
-- Enrichment analysis
-- Exposure analysis
-- Drug discovery and drug-centric typed retrieval
-- Entity neighborhood and shortest-path analysis
-- Explicit Cypher execution
+```mermaid
+flowchart LR
+    U[User / Researcher]
+    F[Frontend UI\nNext.js static export\nserved by Nginx]
+    B[NestJS Backend API]
+    GA[Graph Agent Pipeline\n/graph-agent/chat]
+    OKG[OptimusKG REST Layer\n/optimus/*]
+    GQL[GraphQL API\n/graphql]
+    LLM[LLM Chat Layer\n/llm/*]
+    ALG[Algorithm Layer\n/algorithm/*]
+    N[(Neo4j\nKnowledge Graph)]
+    R[(Redis\nSession + Cache + Throttling)]
+    M[LLM Provider\nOpenAI-compatible]
 
-## Current Design Decisions
-- The graph is the source of truth.
-- Graph-wide analysis no longer requires explicit node selection when a visible graph exists.
-- Query routing can skip extraction and resolution entirely for graph-subject queries.
-- Selected graph context is treated as primary planning context.
-- When no selected, visible, or session graph exists, the system can generate a first graph from resolved query seeds instead of forcing the user to build the graph manually.
-- Generic neighborhood loading is now the fallback, not the default.
+    U --> F
+    F --> B
+    B --> GA
+    B --> OKG
+    B --> GQL
+    B --> LLM
+    B --> ALG
+    GA --> N
+    GA --> R
+    GA --> M
+    OKG --> N
+    GQL --> N
+    ALG --> N
+    ALG --> R
+    LLM --> M
+```
 
-## Current Limitations
-- Community detection is currently topology-based and approximates communities via connected components; it does not yet use Neo4j GDS algorithms.
-- Enrichment is support-ranked graph enrichment, not full statistical enrichment with p-values.
-- Cypher generation is intentionally constrained; the system mainly supports guarded execution of explicit Cypher requests.
-- Backend repository typecheck still contains unrelated pre-existing dataloader/clickhouse breakage outside the graph-agent module.
+## Runtime Layers
+
+```mermaid
+flowchart TD
+    subgraph Frontend
+        FE1[Explore page]
+        FE2[Knowledge graph workspace]
+        FE3[Graph chat UI]
+        FE4[Selection + visible graph context]
+    end
+
+    subgraph Backend["NestJS application"]
+        BE1[AppModule]
+        BE2[GraphAgentModule]
+        BE3[OptimusKgModule]
+        BE4[GraphqlModule]
+        BE5[LlmModule]
+        BE6[AlgorithmModule]
+        BE7[Neo4jModule]
+        BE8[RedisModule]
+    end
+
+    subgraph Data
+        D1[(Neo4j)]
+        D2[(Redis)]
+        D3[LLM provider]
+    end
+
+    FE1 --> FE2
+    FE2 --> FE3
+    FE2 --> FE4
+    FE3 --> BE2
+    FE2 --> BE3
+    FE2 --> BE4
+    FE2 --> BE6
+    BE1 --> BE2
+    BE1 --> BE3
+    BE1 --> BE4
+    BE1 --> BE5
+    BE1 --> BE6
+    BE1 --> BE7
+    BE1 --> BE8
+    BE2 --> D1
+    BE2 --> D2
+    BE2 --> D3
+    BE3 --> D1
+    BE4 --> D1
+    BE6 --> D1
+    BE6 --> D2
+    BE5 --> D3
+```
+
+## What Is Running Today
+
+### Frontend
+
+- Static Next.js export, packaged into an Nginx image for deployment.
+- Main exploration entry lives at the explore page and launches the knowledge graph workspace.
+- The browser sends graph-aware request context:
+  - `selectedNodeContext`
+  - `selectedEdgeContext`
+  - `networkContext`
+
+### Backend
+
+- Single NestJS service boundary.
+- Current major modules:
+  - `GraphAgentModule`
+  - `OptimusKgModule`
+  - `GraphqlModule`
+  - `LlmModule`
+  - `AlgorithmModule`
+  - `Neo4jModule`
+  - `RedisModule`
+
+### Data Plane
+
+- Neo4j is the source of truth for graph entities, relationships, and graph traversal.
+- Redis stores conversation graph memory, cache-like state, and throttling data.
+- LLMs are used for extraction, intent classification, planning support, evidence interpretation, and response synthesis, but not for graph truth.
+
+## Public Backend Surface
+
+| Layer | Route family | Purpose |
+| --- | --- | --- |
+| OptimusKG | `/optimus/stats`, `/optimus/search`, `/optimus/subgraph`, `/optimus/expand`, `/optimus/path`, `/optimus/nodes/:id` | direct graph exploration and graph payload APIs |
+| Graph agent | `/graph-agent/chat` | streamed graph-aware assistant |
+| GraphQL | `/graphql` | typed read/query surface |
+| LLM | `/llm/*` | general LLM-backed features |
+| Algorithm | `/algorithm/*` | graph algorithms and session-linked analysis |
+
+## Why This Architecture Works
+
+- It keeps one backend deployment unit instead of splitting graph logic across many services.
+- It separates direct graph APIs from agentic orchestration.
+- It treats graph context as a first-class request input instead of reconstructing it from chat history.
+- It keeps Neo4j queries and graph actions grounded in the knowledge graph rather than in free-form LLM guesses.
+
+## Slide-Ready Summary
+
+- **Frontend**: graph UI, chat UI, graph-selection context.
+- **Backend**: NestJS app with graph APIs plus a specialized graph-agent pipeline.
+- **Data**: Neo4j for graph truth, Redis for session/memory, LLM provider for language tasks.
+- **Core pattern**: UI context -> route -> plan -> graph-native execution -> grounded response + graph actions.

@@ -1,114 +1,146 @@
 # Execution Flow
 
-## End-To-End Request Flow
-1. The frontend sends the latest user message plus:
-   - `selectedNodeContext`
-   - `selectedEdgeContext`
-   - `networkContext`
-2. `QueryRouterService` decides:
-   - query category
-   - operational intent
-   - whether entity extraction should run
-   - whether entity resolution should run
-   - whether graph context is required
-   - whether the request should enter empty-canvas discovery mode
-3. `GraphContextAgentService` resolves the active graph subject.
-4. `EntityExtractionService` runs only when the router requires it.
-5. `IntentAgentService` classifies the request family.
-6. `EntityResolutionAgentService` runs only when the router requires it.
-7. For discovery-mode requests with no active graph, the orchestrator can ask for clarification before planning if:
-   - the request is too broad
-   - the seed mention is ambiguous in OptimusKG
-8. `RetrievalPlanningAgentService` creates typed plan steps.
-9. `GraphRetrieverService` dispatches each step to:
-   - `GraphAnalysisService`
-   - `RetrievalOperationsService`
-   - `CypherAgentService`
-10. `EvidenceAgentService` builds the evidence bundle and decides whether bounded replanning is needed.
-11. `ReplanningAgentService` optionally appends follow-up steps.
-12. `ReasoningAgentService` writes the final grounded answer.
-13. `ConversationGraphStateService` persists the new session state.
+> Presentation note: use the sequence diagram for a detailed slide and the branch diagram for a simplified "decision tree" slide.
 
-## Graph Context Priority
-The planner and graph-analysis executor use this order:
-1. Selected graph
-2. Visible graph
-3. Session graph
-4. Discovery mode when no graph context exists
+## End-To-End Sequence
 
-## Stage Gating
-### Graph-subject query
-Example: `Summarize these selected nodes`
-- Router marks the request as `GRAPH_QUERY`
-- Extraction is skipped
-- Resolution is skipped
-- Planner uses selected graph ids directly
-- Graph analysis executes immediately
+```mermaid
+sequenceDiagram
+    participant UI as Frontend UI
+    participant GA as GraphAgentService
+    participant CG as ConversationGraphStateService
+    participant QR as QueryRouterService
+    participant GC as GraphContextAgentService
+    participant EX as EntityExtractionService
+    participant IN as IntentAgentService
+    participant ER as EntityResolutionAgentService
+    participant PL as RetrievalPlanningAgentService
+    participant RT as GraphRetrieverService
+    participant EV as EvidenceAgentService
+    participant RP as ReplanningAgentService
+    participant RS as ReasoningAgentService
+    participant Redis as Redis
+    participant Neo4j as Neo4j
 
-### Mixed query
-Example: `How do these selected genes relate to Parkinson disease?`
-- Router marks the request as `MIXED_QUERY`
-- Graph context is primary
-- Extraction resolves explicit non-graph mentions only
-- Planner mixes selected graph anchors with resolved disease anchors
+    UI->>GA: POST /graph-agent/chat\nmessages + selectedNodeContext + selectedEdgeContext + networkContext
+    GA->>CG: load session state
+    CG->>Redis: get state
+    Redis-->>CG: prior graph state
+    CG-->>GA: state
+    GA->>QR: route query
+    QR-->>GA: route + gating flags
+    GA->>GC: build graph context
+    GC-->>GA: graph scope + anchors
+    opt extraction required
+        GA->>EX: extract mentions/concepts
+        EX-->>GA: extracted query
+    end
+    GA->>IN: classify intent
+    IN-->>GA: intent
+    opt resolution required
+        GA->>ER: resolve entities / find candidates
+        ER->>Neo4j: search + resolve
+        Neo4j-->>ER: matches
+        ER-->>GA: resolved entities or ambiguities
+    end
+    GA->>PL: build typed plan
+    PL-->>GA: RetrievalPlanStep[]
+    GA->>RT: execute plan
+    RT->>Neo4j: graph analysis / retrieval / cypher
+    Neo4j-->>RT: graph results
+    RT-->>GA: evidence + graph actions
+    GA->>EV: assess evidence
+    EV-->>GA: evidence bundle
+    opt insufficient and bounded retry remains
+        GA->>RP: append recovery steps
+        RP-->>GA: updated plan
+        GA->>RT: execute appended steps
+        RT->>Neo4j: additional retrieval
+        Neo4j-->>RT: additional results
+        RT-->>GA: augmented evidence
+        GA->>EV: reassess
+        EV-->>GA: updated evidence bundle
+    end
+    GA->>RS: synthesize grounded answer
+    RS-->>GA: final answer text
+    GA->>CG: save session state
+    CG->>Redis: persist graph memory
+    GA-->>UI: streamed text + graphEvidence + graphActions + graphState
+```
 
-### Entity query
-Example: `Which diseases are associated with APOE?`
-- Router marks the request as `ENTITY_QUERY`
-- Extraction and resolution both run
-- Planner emits entity-anchored retrieval steps
+## Request Branching Model
 
-### Discovery query
-Example: `Build a graph for genes associated with Alzheimer disease`
-- Router marks the request as `GRAPH_DISCOVERY_QUERY`
-- The active graph scope is `discovery`
-- Extraction and resolution run because the graph does not yet exist
-- The orchestrator may stop for broad-query or ambiguity clarification
-- Planner emits a compact network-build step such as:
-  - `build-disease-network`
-  - `build-gene-network`
-  - `build-relationship-network`
-  - `build-multi-entity-network`
+```mermaid
+flowchart TD
+    S[Incoming graph-agent request]
+    R[Route query]
+    C[Build graph context]
+    D{What kind of request is this?}
 
-## Execution Paths
-### Graph analysis path
-Used for:
-- graph summaries
-- schema analysis
-- relationship analysis
-- node-type analysis
-- network statistics
-- community detection
-- ontology traversal
-- enrichment
-- graph explanation
+    G1[GRAPH_QUERY\nselected or visible graph is the subject]
+    G2[MIXED_QUERY\ngraph context plus explicit entities]
+    G3[ENTITY_QUERY\nexplicit entity lookup]
+    G4[GRAPH_DISCOVERY_QUERY\nempty canvas, build first graph]
+    G5[CYPHER_QUERY\nexplicit guarded Cypher]
 
-### Retrieval operations path
-Used for:
-- node details
-- shortest path
-- typed entity traversals
-- drug, disease, gene, pathway, anatomy, and exposure lookups
-- candidate ranking and ambiguity support
-- empty-canvas graph discovery and compact initial network generation
+    E[Optional extraction]
+    X[Optional resolution]
+    P[Plan typed operations]
+    T[Execute]
+    V[Evidence assessment]
+    Q{Need clarification\nor bounded replan?}
+    A[Answer + graph actions + state]
 
-### Cypher path
-Used only for explicit Cypher-style requests after validation.
+    S --> R --> C --> D
+    D --> G1 --> P
+    D --> G2 --> E
+    D --> G3 --> E
+    D --> G4 --> E
+    D --> G5 --> P
+    E --> X --> P --> T --> V --> Q
+    Q -->|clarification| A
+    Q -->|replan| T
+    Q -->|good enough| A
+```
 
-## Replanning
-Replanning is bounded.
-- Maximum attempts: 2
-- Trigger: evidence bundle marks the first pass as insufficient
-- Effect: append targeted steps, do not restart the whole pipeline
+## Context Priority
 
-## Frontend Response Contract
-The stream can emit:
+The planner and executors use this precedence:
+
+1. selected graph
+2. visible graph
+3. session graph
+4. discovery mode
+
+That rule is what makes follow-up questions like "summarize these nodes" or "expand this graph" work without re-specifying all entities.
+
+## Important Runtime Behaviors
+
+### Clarification path
+
+- The system can stop before planning when:
+  - the visible graph contains multiple matching nodes for a mention
+  - discovery-mode seed resolution is ambiguous
+  - the empty-canvas query is too broad to seed safely
+- Clarification state is persisted in Redis so the next user turn can resume the original request.
+
+### Discovery path
+
+- If there is no useful current graph, the pipeline can build a compact first network.
+- This is a deliberate branch, not an accidental fallback.
+
+### Streamed response contract
+
+The backend streams four UI-facing outputs:
+
 - assistant text
 - `graphEvidence`
 - `graphActions`
 - `graphState`
 
-Typical graph actions:
-- `load-subgraph`
-- `focus-nodes`
-- `highlight-path`
+## Slide-Ready Summary
+
+- **Input**: user question + live graph context.
+- **Middle**: route -> context -> extract -> resolve -> plan -> execute.
+- **Quality gate**: evidence assessment plus bounded replanning.
+- **Output**: grounded answer plus graph updates the UI can apply immediately.

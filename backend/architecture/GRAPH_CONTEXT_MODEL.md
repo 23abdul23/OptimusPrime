@@ -1,83 +1,125 @@
 # Graph Context Model
 
-## Purpose
-Graph context tells the backend what part of the graph the user is talking about before any retrieval happens.
+This file explains how the backend decides what graph the user is talking about.
 
-## Context Sources
-### Selected graph
-Comes from:
-- single-click node selection
-- single-click edge selection
-- ctrl/meta multi-select
-- box selection
-- lasso selection
+> Presentation note: the precedence diagram below is the cleanest "graph context" visual for a slide.
 
-Payload fields:
+## Context Precedence
+
+```mermaid
+flowchart TD
+    Q[New request]
+    S{Selected nodes or edges?}
+    V{Visible graph available?}
+    M{Session graph available?}
+    D[Discovery mode]
+
+    A[Scope = selection]
+    B[Scope = visible-subgraph]
+    C[Scope = session]
+
+    Q --> S
+    S -->|yes| A
+    S -->|no| V
+    V -->|yes| B
+    V -->|no| M
+    M -->|yes| C
+    M -->|no| D
+```
+
+## Current Input Contract
+
+The frontend can send:
+
 - `selectedNodeContext`
 - `selectedEdgeContext`
-- `networkContext.selectedNodeIds`
-- `networkContext.selectedEdgeIds`
-
-Rule:
-- selected nodes and edges are the primary subject whenever the query refers to `these nodes`, `selected nodes`, `these edges`, `them`, or similar graph references
-
-### Visible graph
-Comes from the currently rendered network.
-
-Payload fields:
 - `networkContext.totalNodes`
 - `networkContext.totalEdges`
+- `networkContext.selectedNodeIds`
+- `networkContext.selectedEdgeIds`
 - `networkContext.visibleNodeIds`
 - `networkContext.visibleEdgeIds`
 - `networkContext.visibleNodeContext`
 - `networkContext.topNodeTypes`
 
-Rule:
-- if nothing is selected, the visible graph becomes the active graph subject for graph-wide analysis queries
+## Source Types
 
-### Session graph
-Comes from Redis conversation state.
+### 1. Selected graph
 
-Stored fields:
-- `selectedNodeIds`
-- `selectedEdgeIds`
-- `visibleNodeIds`
-- `visibleEdgeIds`
-- `activeEntities`
-- `resolvedNodeIds`
-- `frontierNodeIds`
+Used when the request refers to:
 
-Rule:
-- session graph is the fallback only when neither selected graph nor visible graph is available
+- "these nodes"
+- "selected nodes"
+- "this edge"
+- "compare these"
+- "how are these connected"
 
-### Discovery mode
-Comes into play when:
-- `selectedNodeContext` is empty
-- `selectedEdgeContext` is empty
-- visible graph node count is zero
-- no active session graph is being referenced as the subject
+This is the strongest signal because it is the most explicit graph subject.
 
-Rule:
-- discovery mode is the final fallback when the user wants the agent to create the first useful graph from query-resolved seed entities
+### 2. Visible graph
 
-## Graph Scope Modes
-### `selection`
-Used when the request is anchored to selected nodes or edges.
+Used when nothing is selected but the user clearly means the graph currently on screen:
 
-### `visible-subgraph`
-Used when the user refers to the graph/network and no stronger selection anchor exists.
+- "summarize this graph"
+- "what does this network show"
+- "what relationships dominate here"
 
-### `session`
-Used when the user refers to prior graph context and current frontend graph context is absent.
+### 3. Session graph
 
-### `discovery`
-Used when the frontend graph is effectively empty and the request should generate a new compact network instead of analyzing an existing one.
+Used when the live frontend context is sparse but the conversation already established graph anchors in a prior turn.
 
-### `none`
-Used when no graph context is available.
+### 4. Discovery mode
 
-## Graph Context Agent Output
-`GraphContextAgentService` returns:
+Used when:
+
+- nothing is selected
+- the visible graph is effectively empty
+- session graph fallback is not sufficient
+- the user wants the system to create the first useful graph
+
+## Graph Scope Model
+
+```mermaid
+flowchart LR
+    subgraph Input
+        S1[selectedNodeContext]
+        S2[selectedEdgeContext]
+        V1[visibleNodeIds]
+        V2[visibleEdgeIds]
+        R1[Redis session state]
+    end
+
+    subgraph ContextAgent["GraphContextAgentService"]
+        C1[Resolve graph references]
+        C2[Choose active anchors]
+        C3[Assign graph scope mode]
+    end
+
+    subgraph Output
+        O1[activeAnchors]
+        O2[selectedNodes / selectedEdges]
+        O3[visibleNodes / visible ids]
+        O4[graphScope]
+        O5[graphReferences]
+    end
+
+    S1 --> C1
+    S2 --> C1
+    V1 --> C1
+    V2 --> C1
+    R1 --> C1
+    C1 --> C2 --> C3
+    C3 --> O1
+    C3 --> O2
+    C3 --> O3
+    C3 --> O4
+    C3 --> O5
+```
+
+## Current Output Shape
+
+The context agent returns:
+
 - `activeAnchors`
 - `selectedNodes`
 - `selectedEdges`
@@ -90,25 +132,20 @@ Used when no graph context is available.
 - `selectedEdgeTypes`
 
 ## Planner Rules
-- Selected graph takes priority over visible graph.
-- Visible graph takes priority over session graph.
-- Session graph takes priority over discovery mode.
-- Graph-wide analysis uses graph ids directly; it does not require explicit anchor entity resolution.
-- Entity queries may still use graph context for disambiguation and ranking.
-- Mixed queries combine selected or visible graph context with resolved explicit entities.
-- Discovery queries generate a new graph only after explicit seed entities have been resolved or clarified.
 
-## Ambiguity Rules
-- If explicit mention matching is ambiguous inside the visible graph, visible-graph matches are preferred before global OptimusKG resolution.
-- If a graph-subject query has enough selected or visible graph context, the system should not manufacture entity mentions from verbs such as `summarize`, `compare`, or `describe`.
-- If the graph is empty and the query is broad or ambiguous, the system should clarify before graph generation instead of choosing arbitrary seed entities.
+- Selected graph beats visible graph.
+- Visible graph beats session graph.
+- Session graph beats discovery mode.
+- Graph-subject questions do not need forced entity resolution when the graph itself is already the subject.
+- Mixed questions combine graph anchors with newly resolved entities.
 
-## Current Frontend Contract
-For correct graph-aware planning, the frontend is expected to send:
-- `selectedNodeContext`
-- `selectedEdgeContext`
-- `networkContext.selectedNodeIds`
-- `networkContext.selectedEdgeIds`
-- `networkContext.visibleNodeIds`
-- `networkContext.visibleEdgeIds`
-- `networkContext.visibleNodeContext`
+## Why This Matters
+
+Without explicit graph context handling, the agent would incorrectly treat many graph-subject questions as generic chat prompts and try to rediscover already-selected nodes from text. The current model avoids that failure mode.
+
+## Slide-Ready Summary
+
+- **Selection** is strongest.
+- **Visible graph** is second.
+- **Session memory** is fallback continuity.
+- **Discovery mode** is only for empty-canvas requests that need the first graph to be built.

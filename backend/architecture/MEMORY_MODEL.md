@@ -1,74 +1,131 @@
 # Memory Model
 
-## Storage
-Conversation graph memory is stored in Redis through `ConversationGraphStateService`.
+The system uses memory to preserve graph continuity, not to simulate open-ended long-form chat memory.
 
-## Current State Shape
-Each session stores:
-- `sessionId`
-- `activeEntities`
-- `resolvedNodeIds`
-- `frontierNodeIds`
-- `retrievedNodeIds`
-- `evidenceCache`
-- `priorQueries`
-- `lastPlan`
-- `selectedNodeIds`
-- `selectedEdgeIds`
-- `visibleNodeIds`
-- `visibleEdgeIds`
-- `updatedAt`
+> Presentation note: the state-shape diagram below works well as a Redis/session-memory slide.
 
-## Meaning Of The Fields
-### `activeEntities`
-The current entity anchors most relevant to the active conversation.
+## Memory Placement
 
-### `resolvedNodeIds`
-Resolved entity ids accumulated across turns.
+```mermaid
+flowchart LR
+    UI[Frontend turn]
+    GA[GraphAgentService]
+    CG[ConversationGraphStateService]
+    R[(Redis)]
+    NX[Next request]
 
-### `frontierNodeIds`
-Candidate expansion anchors for follow-up graph exploration.
+    UI --> GA
+    GA --> CG
+    CG --> R
+    R --> CG
+    CG --> NX
+```
 
-### `retrievedNodeIds`
-Nodes already touched by prior retrieval steps.
+## State Shape
 
-### `evidenceCache`
-Bounded cache of recent evidence items used for follow-up reasoning and replanning.
+```mermaid
+flowchart TD
+    S[ConversationGraphState]
+    S --> A[activeEntities]
+    S --> B[resolvedNodeIds]
+    S --> C[frontierNodeIds]
+    S --> D[retrievedNodeIds]
+    S --> E[evidenceCache]
+    S --> F[priorQueries]
+    S --> G[lastPlan]
+    S --> H[selectedNodeIds]
+    S --> I[selectedEdgeIds]
+    S --> J[visibleNodeIds]
+    S --> K[visibleEdgeIds]
+    S --> L[pendingClarification]
+    S --> M[updatedAt]
+```
 
-### `priorQueries`
-Recent user questions in the current graph session.
+## Current Stored Fields
 
-### `lastPlan`
-The last typed retrieval plan executed for the session.
+| Field | Purpose |
+| --- | --- |
+| `sessionId` | conversation/session key |
+| `activeEntities` | working set of resolved anchors |
+| `resolvedNodeIds` | accumulated entity node ids |
+| `frontierNodeIds` | useful expansion candidates for follow-up turns |
+| `retrievedNodeIds` | nodes already covered by retrieval |
+| `evidenceCache` | recent evidence items for continuity and avoidance of redundant weak retrieval |
+| `priorQueries` | recent question history |
+| `lastPlan` | most recent typed execution plan |
+| `selectedNodeIds` | last selected graph nodes |
+| `selectedEdgeIds` | last selected graph edges |
+| `visibleNodeIds` | last visible graph nodes |
+| `visibleEdgeIds` | last visible graph edges |
+| `pendingClarification` | unresolved ambiguity state |
+| `updatedAt` | latest write timestamp |
 
-### `selectedNodeIds` and `selectedEdgeIds`
-The last known selected graph context.
+## Pending Clarification State
 
-### `visibleNodeIds` and `visibleEdgeIds`
-The last known visible graph context.
+One of the newer behaviors in the live code is persisted clarification state.
+
+```mermaid
+flowchart LR
+    A[Ambiguous mention\nor broad discovery query]
+    B[Build clarification prompt]
+    C[Save pendingClarification in Redis]
+    D[Next user reply]
+    E[Resume original request]
+
+    A --> B --> C --> D --> E
+```
+
+`pendingClarification` stores:
+
+- clarification kind
+- original query
+- pending intent and operation
+- extracted query snapshot
+- already resolved entities
+- unresolved entity text
+- candidate entity list
 
 ## How Memory Is Used
-- Router does not rely on memory for mention extraction.
-- Graph context agent can fall back to session graph when frontend context is absent.
-- Planner can reuse active entities and graph frontier for follow-up questions.
-- Evidence agent uses recent evidence to detect insufficiency and to avoid repeating weak retrieval.
-- Reasoning agent can refer to ongoing graph context without re-querying all prior turns.
 
-## Write Policy
-After each request, the backend persists:
-- the latest active entities
-- selected and visible graph ids
-- the latest evidence bundle items
-- the latest plan
-- updated timestamps
+### Graph continuity
 
-The service also deduplicates and truncates arrays so memory stays bounded.
+- Follow-up requests can reuse active graph anchors even when the user does not restate them.
 
-## Current Limits
-- `activeEntities` is trimmed to a small working set.
-- node-id lists are deduplicated and capped.
-- `evidenceCache` is bounded.
-- selection ids are capped more aggressively than visible graph ids.
+### Planning continuity
+
+- The planner can consider previous successful anchors and graph frontier nodes.
+
+### Clarification continuity
+
+- Ambiguity resolution can span multiple turns without losing the original request.
+
+### Evidence continuity
+
+- Recent evidence helps avoid repeating low-value retrieval and supports better follow-up reasoning.
+
+## Bounding Rules
+
+The stored state is intentionally bounded:
+
+- arrays are deduplicated
+- evidence is capped
+- node-id sets are trimmed
+- active entities are ranked and merged instead of growing unbounded
 
 ## Design Principle
-Memory is graph-context memory, not free-form long-form chat memory. It exists to preserve graph anchors, graph scope, prior evidence, and plan continuity across turns.
+
+This is **graph memory**, not generic memory. It exists to preserve:
+
+- graph subject
+- graph anchors
+- execution continuity
+- clarification continuity
+- recent evidence
+
+It does not exist to treat the system like an unconstrained chat diary.
+
+## Slide-Ready Summary
+
+- Redis stores session-scoped graph memory.
+- Memory keeps graph continuity across turns.
+- The most important recent addition is `pendingClarification`, which lets the system safely pause and resume ambiguous requests.

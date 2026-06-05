@@ -1,65 +1,126 @@
 # Target Architecture
 
-## Direction
-Keep the current single NestJS orchestrator, but continue to strengthen the specialized-service boundaries. The target is not a loose autonomous swarm. The target is a horizontally specialized, typed graph-agent architecture inside one service boundary.
+This file describes where the project should evolve next without changing its core shape.
 
-## What Is Already In Place
-- router-gated extraction and resolution
-- graph-context-first planning
-- empty-canvas graph discovery with clarification-before-expansion
-- dedicated graph analysis executor
-- dedicated typed retrieval executor
-- guarded Cypher boundary
-- evidence assessment
-- bounded replanning
-- grounded reasoning
-- Redis-backed session graph memory
+> Presentation note: this is the roadmap slide deck source. The first diagram is the best "target state" visual.
 
-## Near-Term Target
-### Stronger graph analytics
-- statistical enrichment rather than support-only enrichment
-- GDS-backed community detection where available
-- better centrality and module scoring
+## Target Shape
 
-### Better ambiguity handling
-- explicit clarification plans as first-class planner outputs
-- richer visible-graph matching and grouped answers for ambiguous labels
+```mermaid
+flowchart TD
+    subgraph UX["User experience"]
+        U1[Graph workspace]
+        U2[Agent chat]
+        U3[Actionable graph updates]
+    end
 
-### Stronger retrieval planning
-- more explicit executor scoring before the plan is emitted
-- richer operation composition for multi-step graph-wide questions
-- better planner verification against actual graph scope
-- stronger discovery planning for broad-topic queries and compact first-graph generation
+    subgraph AgentCore["Typed graph-agent core"]
+        A1[Context-first orchestration]
+        A2[Typed planning]
+        A3[Executor scoring]
+        A4[Evidence-first response synthesis]
+        A5[Clarification-first recovery]
+    end
 
-### Better evidence grounding
-- provenance-aware scoring across more tool families
-- stronger partial-evidence messaging
-- evaluation suites for graph-summary, ontology, enrichment, and drug-discovery flows
+    subgraph Execution["Execution plane"]
+        E1[Graph analysis]
+        E2[Entity retrieval]
+        E3[Guarded Cypher]
+        E4[GDS-backed analytics]
+        E5[Multi-KG adapters]
+    end
 
-### Multi-source support
-- keep OptimusKG as the current source of truth
-- evolve the retrieval and graph-analysis layers so other KGs can be added behind the same contracts
+    subgraph State["State and trust"]
+        S1[Redis graph memory]
+        S2[Provenance scoring]
+        S3[Evaluation suites]
+        S4[Observability]
+    end
 
-## Architecture Shape
-### Keep
+    U1 --> A1
+    U2 --> A1
+    A1 --> A2 --> A3 --> E1
+    A3 --> E2
+    A3 --> E3
+    A3 --> E4
+    E1 --> A4
+    E2 --> A4
+    E3 --> A4
+    E4 --> A4
+    A4 --> U3
+    A1 --> S1
+    A4 --> S2
+    A4 --> S3
+    A1 --> S4
+    E1 --> E5
+    E2 --> E5
+```
+
+## What Should Stay Stable
+
+- one backend service boundary
 - one orchestrator
-- specialized services
 - typed plan steps
+- graph-context-first execution
+- Neo4j-backed truth model
 - bounded replanning
+- guarded Cypher boundary
 
-### Avoid
+## What Should Improve Next
+
+### 1. Stronger analytics
+
+- GDS-backed community detection
+- better centrality and module scoring
+- more statistically meaningful enrichment
+
+### 2. Better planning quality
+
+- stronger executor selection
+- richer multi-step plan composition
+- better plan verification against real graph scope
+
+### 3. Better ambiguity handling
+
+- clarification as a more explicit planner output
+- richer candidate grouping
+- better visible-graph disambiguation
+
+### 4. Better trust and evaluation
+
+- stronger provenance-aware evidence scoring
+- targeted eval suites for:
+  - graph summary
+  - ontology traversal
+  - discovery flows
+  - drug/pathway search
+
+### 5. Better extensibility
+
+- keep OptimusKG as the current primary source
+- make execution contracts reusable for additional KGs later
+
+## Current vs Target
+
+| Dimension | Current | Target |
+| --- | --- | --- |
+| Orchestration | typed single orchestrator | same, but with stronger verification |
+| Analytics | Neo4j traversal + custom logic | richer graph analytics, optionally GDS-backed |
+| Clarification | handled inside orchestrator | promoted to a more explicit plan/recovery capability |
+| Evidence | bundled and scored | more provenance-aware, more evaluable |
+| Data sources | OptimusKG-centered | OptimusKG-first, adapter-friendly |
+
+## Explicit Non-Goals
+
+Avoid drifting into:
+
 - free-form multi-agent debate loops
-- planner-generated Cypher as the default path
+- unconstrained generated Cypher as the default path
 - LLM-only entity existence checks
+- fragmented microservices without a clear benefit
 
-## Desired End State
-The graph agent should answer most KG questions through:
-1. graph context resolution
-2. typed intent classification
-3. clarification before expansion when the graph is empty and the request is too broad or ambiguous
-4. typed operation planning
-5. graph-native execution
-6. explicit evidence assessment
-7. grounded response synthesis
+## Slide-Ready Summary
 
-The visible graph and selected graph should remain first-class subjects throughout that flow.
+- Keep the architecture **typed**, **graph-native**, and **single-service**.
+- Improve analytics, planning quality, clarification, and evaluation.
+- Grow toward a stronger platform, not a looser swarm.
