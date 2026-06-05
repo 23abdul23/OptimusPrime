@@ -75,6 +75,8 @@ export class GraphAgentService {
           networkContext: promptDto.networkContext,
           state: previousState,
         });
+        const isDiscoveryMode =
+          queryRoute.category === 'GRAPH_DISCOVERY_QUERY' || graphContext.graphScope.mode === 'discovery';
         const extractedQuery = queryRoute.requiresEntityExtraction
           ? this.entityExtractionService.extractQuery({ query })
           : this.createEmptyExtractedQuery(query);
@@ -280,6 +282,186 @@ export class GraphAgentService {
           ? this.getUnresolvedMentionTexts(extractedQuery.mentions, resolvedQueryEntities)
           : [];
 
+        if (isDiscoveryMode) {
+          const discoveryAssessment = this.assessDiscoveryQueryBroadness({
+            query,
+            extractedQuery,
+            resolvedEntities,
+          });
+          if (discoveryAssessment.shouldClarify) {
+            const evidenceBundle = this.evidenceAgentService.buildBundle({
+              query,
+              items: [
+                {
+                  id: `discovery-broad-${Date.now()}`,
+                  kind: 'query',
+                  title: 'Discovery query needs a narrower anchor',
+                  summary: discoveryAssessment.summary,
+                  score: 0.58,
+                  nodeIds: [],
+                  edgeIds: [],
+                  metadata: {
+                    suggestions: discoveryAssessment.suggestions,
+                    broadnessReason: discoveryAssessment.reason,
+                  },
+                },
+              ],
+              resolvedEntities,
+              plan: [
+                {
+                  id: `clarify-discovery-${Date.now()}`,
+                  intent: 'graph-discovery',
+                  operation: 'discover-graph',
+                  executor: 'retrieval-operations',
+                  tool: 'discoverGraph',
+                  description: 'Clarify the initial graph anchor before generating a discovery graph.',
+                  params: {
+                    suggestions: discoveryAssessment.suggestions,
+                    broadnessReason: discoveryAssessment.reason,
+                  },
+                },
+              ],
+              warnings: [
+                'The current graph is empty, and the query is too broad to generate a useful initial network safely.',
+              ],
+              selectedNodeIds: (promptDto.selectedNodeContext ?? []).map((node) => node.id),
+              visibleNodeIds: promptDto.networkContext?.visibleNodeIds ?? previousState.visibleNodeIds,
+              replanAttempts: 0,
+            });
+
+            const nextState = await this.conversationStateService.saveConversationGraphState(
+              this.buildNextState({
+                previousState,
+                sessionId,
+                resolvedEntities,
+                evidenceBundle,
+                selectedNodeIds: (promptDto.selectedNodeContext ?? []).map((node) => node.id),
+                selectedEdgeIds: (promptDto.selectedEdgeContext ?? []).map((edge) => edge.id),
+                networkContext: promptDto.networkContext,
+              }),
+            );
+
+            writer.write({
+              type: 'data-graphEvidence',
+              id: `graph-evidence-${responseId}`,
+              data: evidenceBundle,
+            });
+            writer.write({
+              type: 'data-graphActions',
+              id: `graph-actions-${responseId}`,
+              data: [],
+            });
+            writer.write({
+              type: 'data-graphState',
+              id: `graph-state-${responseId}`,
+              data: {
+                sessionId,
+                state: nextState,
+              },
+            });
+            this.writeText(
+              writer,
+              `${discoveryAssessment.summary} Try one of these narrower starting points: ${discoveryAssessment.suggestions.join('; ')}.`,
+            );
+            return;
+          }
+
+          const discoveryAmbiguities = await this.findDiscoveryAmbiguities(extractedQuery, unresolvedMentions);
+          if (discoveryAmbiguities.length > 0) {
+            const evidenceBundle = this.evidenceAgentService.buildBundle({
+              query,
+              items: discoveryAmbiguities.map((ambiguity, index) => ({
+                id: `discovery-ambiguity-${index}`,
+                kind: 'query' as const,
+                title: `Ambiguous discovery seed: ${ambiguity.mention}`,
+                summary: `I found ${ambiguity.candidates.length} OptimusKG candidates for "${ambiguity.mention}": ${ambiguity.candidates.map((candidate) => `${candidate.displayName} (${candidate.typeName})`).join(', ')}.`,
+                score: 0.66,
+                nodeIds: ambiguity.candidates.map((candidate) => candidate.id),
+                edgeIds: [],
+                metadata: {
+                  mention: ambiguity.mention,
+                  candidates: ambiguity.candidates.map((candidate) => ({
+                    id: candidate.id,
+                    displayName: candidate.displayName,
+                    typeName: candidate.typeName,
+                    matchedOn: candidate.matchedOn,
+                    score: candidate.score,
+                  })),
+                },
+              })),
+              resolvedEntities,
+              plan: [
+                {
+                  id: `clarify-discovery-ambiguity-${Date.now()}`,
+                  intent: 'graph-discovery',
+                  operation: 'find-candidate-entities',
+                  executor: 'retrieval-operations',
+                  tool: 'findCandidateEntities',
+                  description: 'Clarify the intended discovery seed before generating a graph.',
+                  params: {
+                    ambiguities: discoveryAmbiguities.map((ambiguity) => ({
+                      mention: ambiguity.mention,
+                      candidates: ambiguity.candidates.map((candidate) => ({
+                        id: candidate.id,
+                        displayName: candidate.displayName,
+                        typeName: candidate.typeName,
+                      })),
+                    })),
+                  },
+                },
+              ],
+              warnings: discoveryAmbiguities.map(
+                (ambiguity) =>
+                  `The empty-canvas graph request is ambiguous for "${ambiguity.mention}". Refine which OptimusKG entity should seed the graph.`,
+              ),
+              selectedNodeIds: [],
+              visibleNodeIds: promptDto.networkContext?.visibleNodeIds ?? previousState.visibleNodeIds,
+              replanAttempts: 0,
+            });
+
+            const nextState = await this.conversationStateService.saveConversationGraphState(
+              this.buildNextState({
+                previousState,
+                sessionId,
+                resolvedEntities,
+                evidenceBundle,
+                selectedNodeIds: [],
+                selectedEdgeIds: [],
+                networkContext: promptDto.networkContext,
+              }),
+            );
+
+            writer.write({
+              type: 'data-graphEvidence',
+              id: `graph-evidence-${responseId}`,
+              data: evidenceBundle,
+            });
+            writer.write({
+              type: 'data-graphActions',
+              id: `graph-actions-${responseId}`,
+              data: [],
+            });
+            writer.write({
+              type: 'data-graphState',
+              id: `graph-state-${responseId}`,
+              data: {
+                sessionId,
+                state: nextState,
+              },
+            });
+            this.writeText(
+              writer,
+              discoveryAmbiguities
+                .map(
+                  (ambiguity) =>
+                    `I found ${ambiguity.candidates.length} OptimusKG candidates for "${ambiguity.mention}": ${ambiguity.candidates.map((candidate) => `${candidate.displayName} (${candidate.typeName})`).join(', ')}. Which one should I use to seed the graph?`,
+                )
+                .join(' '),
+            );
+            return;
+          }
+        }
+
         if (
           queryRoute.requiresEntityResolution &&
           this.shouldBlockOnUnresolvedMentions(extractedQuery.mentions.length, intent.operation, unresolvedMentions)
@@ -341,7 +523,9 @@ export class GraphAgentService {
           });
           this.writeText(
             writer,
-            `I could not confidently resolve these explicit mentions in OptimusKG: ${unresolvedMentions.join(', ')}. Refine the names or select the intended nodes in the graph and ask again.`,
+            isDiscoveryMode
+              ? `I could not confidently resolve these explicit mentions in OptimusKG to seed a new graph: ${unresolvedMentions.join(', ')}. Refine the names or ask for a narrower graph topic and try again.`
+              : `I could not confidently resolve these explicit mentions in OptimusKG: ${unresolvedMentions.join(', ')}. Refine the names or select the intended nodes in the graph and ask again.`,
           );
           return;
         }
@@ -772,6 +956,134 @@ export class GraphAgentService {
     }
 
     return [...merged.values()];
+  }
+
+  private async findDiscoveryAmbiguities(extractedQuery: ExtractedQuery, unresolvedMentions: string[]) {
+    const unresolvedMentionLookup = new Set(unresolvedMentions.map((mention) => mention.trim().toLowerCase()));
+    const ambiguities: Array<{
+      mention: string;
+      candidates: Awaited<ReturnType<EntityResolutionAgentService['findEntityCandidates']>>;
+    }> = [];
+
+    for (const mention of extractedQuery.mentions) {
+      const normalizedMention = mention.text.trim().toLowerCase();
+      if (!unresolvedMentionLookup.has(normalizedMention)) {
+        continue;
+      }
+
+      const candidates = await this.entityResolutionAgentService.findEntityCandidates(mention.text, mention.typeHints, 6);
+      if (candidates.length > 1) {
+        ambiguities.push({
+          mention: mention.text,
+          candidates,
+        });
+      }
+    }
+
+    return ambiguities;
+  }
+
+  private assessDiscoveryQueryBroadness(params: {
+    query: string;
+    extractedQuery: ExtractedQuery;
+    resolvedEntities: ResolvedEntity[];
+  }) {
+    const { query, extractedQuery, resolvedEntities } = params;
+    if (resolvedEntities.length > 0) {
+      return {
+        shouldClarify: false,
+        reason: '',
+        summary: '',
+        suggestions: [] as string[],
+      };
+    }
+
+    const normalized = query.trim().toLowerCase();
+    const broadTokens = [
+      'cancer',
+      'oncology',
+      'tumor',
+      'heart disease',
+      'cardiovascular disease',
+      'dementia',
+      'neurodegeneration',
+      'inflammation',
+      'genes',
+      'proteins',
+      'drugs',
+      'pathways',
+      'biomarkers',
+      'phenotypes',
+    ];
+    const isVeryShort = normalized.split(/\s+/).filter((token) => token.length > 0).length <= 3;
+    const hasOnlyGenericConcepts =
+      extractedQuery.mentions.length === 0 &&
+      extractedQuery.concepts.length > 0 &&
+      extractedQuery.concepts.every((concept) => ['disease-area', 'entity-class', 'general'].includes(concept.category));
+    const lacksConcreteEntitySignal =
+      extractedQuery.mentions.length === 0 &&
+      !/\b[A-Z0-9-]{2,12}\b/.test(query) &&
+      !/\bdisease\b|\bsyndrome\b|\bdisorder\b|\bdementia\b|\bcancer\b|\bphenotype\b|\bpathway\b/i.test(query);
+
+    const shouldClarify =
+      (extractedQuery.mentions.length === 0 && extractedQuery.concepts.length === 0 && isVeryShort) ||
+      (hasOnlyGenericConcepts && isVeryShort) ||
+      (lacksConcreteEntitySignal && broadTokens.some((token) => normalized.includes(token)));
+
+    if (!shouldClarify) {
+      return {
+        shouldClarify: false,
+        reason: '',
+        summary: '',
+        suggestions: [] as string[],
+      };
+    }
+
+    const suggestions = this.buildDiscoverySuggestions(normalized);
+    return {
+      shouldClarify: true,
+      reason: 'broad-or-generic-empty-canvas-query',
+      summary:
+        'The graph is empty, and this request is too broad to choose a safe starting set of seed nodes automatically.',
+      suggestions,
+    };
+  }
+
+  private buildDiscoverySuggestions(normalizedQuery: string) {
+    if (normalizedQuery.includes('cancer')) {
+      return [
+        'Show me a compact network for breast cancer genes',
+        'Build a graph around EGFR signaling in lung cancer',
+        'Create a network of approved drugs for colorectal cancer',
+      ];
+    }
+    if (normalizedQuery.includes('dementia') || normalizedQuery.includes('neurodegeneration')) {
+      return [
+        'Build a graph for genes associated with Alzheimer disease',
+        'Show a compact Parkinson disease pathway network',
+        'Create a network for APOE and amyloid beta in Alzheimer disease',
+      ];
+    }
+    if (normalizedQuery.includes('gene')) {
+      return [
+        'Build a graph for genes associated with Alzheimer disease',
+        'Show a compact network around MAPT',
+        'Create a network linking APOE and Parkinson disease',
+      ];
+    }
+    if (normalizedQuery.includes('drug')) {
+      return [
+        'Build a graph for Metformin indications and targets',
+        'Show approved drugs for Alzheimer disease',
+        'Create a network for EGFR-targeting drugs',
+      ];
+    }
+
+    return [
+      'Build a graph for APOE and Alzheimer disease',
+      'Show a compact network around MAPT',
+      'Create a network of approved drugs for Parkinson disease',
+    ];
   }
 
   private buildSelectedEdgeContextEvidence(

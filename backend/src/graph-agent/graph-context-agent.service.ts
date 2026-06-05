@@ -109,6 +109,7 @@ export class GraphContextAgentService {
       visibleEdgeIds: networkContext?.visibleEdgeIds ?? state.visibleEdgeIds,
       graphScope: {
         mode: this.pickGraphScopeMode({
+          queryRoute,
           activeAnchors,
           graphReferences,
           networkContext,
@@ -173,12 +174,13 @@ export class GraphContextAgentService {
   }
 
   private pickGraphScopeMode(params: {
+    queryRoute: QueryRoute;
     activeAnchors: GraphSelectionNodeContext[];
     graphReferences: GraphContextResult['graphReferences'];
     networkContext?: GraphNetworkContext;
     state: ConversationGraphState;
   }): GraphContextResult['graphScope']['mode'] {
-    const { activeAnchors, graphReferences, networkContext, state } = params;
+    const { queryRoute, activeAnchors, graphReferences, networkContext, state } = params;
 
     if (activeAnchors.length > 0) {
       return 'selection';
@@ -188,6 +190,9 @@ export class GraphContextAgentService {
     }
     if (graphReferences.referencesSessionGraph && state.activeEntities.length > 0) {
       return 'session';
+    }
+    if (queryRoute.category === 'GRAPH_DISCOVERY_QUERY') {
+      return 'discovery';
     }
 
     return 'none';

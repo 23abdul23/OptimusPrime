@@ -2,6 +2,7 @@ import type { UIMessage } from 'ai';
 import type { SerializedGraphPayload } from '@/optimuskg/optimuskg.service';
 
 export type GraphIntent =
+  | 'graph-discovery'
   | 'graph-summary'
   | 'schema-analysis'
   | 'graph-relationship-analysis'
@@ -61,6 +62,7 @@ export interface ExtractedConcept {
 export interface QueryIntentClassification {
   primary: GraphIntent;
   operation:
+    | 'graph-discovery'
     | 'graph-summary'
     | 'schema-analysis'
     | 'graph-relationship-analysis'
@@ -92,6 +94,7 @@ export interface QueryIntentClassification {
 }
 
 export type QueryCategory =
+  | 'GRAPH_DISCOVERY_QUERY'
   | 'ENTITY_QUERY'
   | 'GRAPH_QUERY'
   | 'MIXED_QUERY'
@@ -122,6 +125,7 @@ export interface QueryRoute {
     hasExplicitEntitySignal: boolean;
     hasCypherSignal: boolean;
     hasSelectionContext: boolean;
+    hasDiscoveryTrigger: boolean;
   };
 }
 
@@ -151,6 +155,10 @@ export interface ResolvedEntity {
   matchedOn: string[];
   resolutionStage?: 'exact' | 'alias' | 'synonym' | 'identifier' | 'semantic';
   source: ExtractedMention['source'] | 'concept' | 'selected' | 'memory';
+  aliases?: string[];
+  identifiers?: string[];
+  sourceNames?: string[];
+  seedTerms?: string[];
 }
 
 export interface GraphSelectionNodeContext {
@@ -181,7 +189,7 @@ export interface GraphNetworkContext {
 }
 
 export interface GraphScope {
-  mode: 'selection' | 'visible-subgraph' | 'session' | 'none';
+  mode: 'selection' | 'visible-subgraph' | 'session' | 'discovery' | 'none';
   selectedNodeCount: number;
   selectedEdgeCount: number;
   visibleNodeCount: number;
@@ -210,6 +218,13 @@ export type RetrievalExecutor =
 
 export type RetrievalOperation =
   | 'resolve-explicit-mentions'
+  | 'discover-graph'
+  | 'build-disease-network'
+  | 'build-gene-network'
+  | 'build-drug-network'
+  | 'build-pathway-network'
+  | 'build-relationship-network'
+  | 'build-multi-entity-network'
   | 'network-summary'
   | 'summarize-selected-nodes'
   | 'summarize-visible-subgraph'
@@ -311,6 +326,13 @@ export interface RetrievalPlanStep {
   tool:
     | 'searchEntities'
     | 'resolveEntity'
+    | 'discoverGraph'
+    | 'buildDiseaseNetwork'
+    | 'buildGeneNetwork'
+    | 'buildDrugNetwork'
+    | 'buildPathwayNetwork'
+    | 'buildRelationshipNetwork'
+    | 'buildMultiEntityNetwork'
     | 'summarizeNodes'
     | 'summarizeSubgraph'
     | 'analyzeSchema'

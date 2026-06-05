@@ -25,6 +25,27 @@ export class RetrievalOperationsService {
 
   async execute(step: RetrievalPlanStep, resolvedEntities: ResolvedEntity[]): Promise<RetrievalOperationResult> {
     switch (step.operation) {
+      case 'discover-graph':
+        return this.discoverGraph(step);
+
+      case 'build-disease-network':
+        return this.buildDiseaseNetwork(step);
+
+      case 'build-gene-network':
+        return this.buildGeneNetwork(step);
+
+      case 'build-drug-network':
+        return this.buildDrugNetwork(step);
+
+      case 'build-pathway-network':
+        return this.buildPathwayNetwork(step);
+
+      case 'build-relationship-network':
+        return this.buildRelationshipNetwork(step);
+
+      case 'build-multi-entity-network':
+        return this.buildMultiEntityNetwork(step);
+
       case 'load-node-details':
         return this.getNodeDetails((step.params.nodeIds as string[] | undefined) ?? []);
 
@@ -349,6 +370,362 @@ export class RetrievalOperationsService {
     }
 
     return this.getRelatedEntities(nodeId, defaultNodeTypes, relationshipTypes, limit);
+  }
+
+  private async discoverGraph(step: RetrievalPlanStep): Promise<RetrievalOperationResult> {
+    const nodeIds = this.extractStepNodeIds(step);
+    if (nodeIds.length === 0) {
+      return {
+        items: [],
+        warnings: ['No resolved seed entities were available for graph discovery.'],
+      };
+    }
+
+    const details = await this.getNodeDetails(nodeIds.slice(0, 4));
+    const graph = await this.optimusKgService.expandSubgraph(
+      nodeIds,
+      Number(step.params.hops ?? 1),
+      Number(step.params.maxNodes ?? 80),
+      18,
+      (step.params.relationshipTypes as string[] | undefined) ?? [],
+      (step.params.nodeTypes as string[] | undefined) ?? [],
+    );
+
+    return this.mergeOperationResults([
+      details,
+      {
+        items: [this.graphToEvidence(step.id, 'query', step.description, graph, 0.78)],
+        graph,
+        highlightNodeIds: nodeIds,
+      },
+    ]);
+  }
+
+  private async buildDiseaseNetwork(step: RetrievalPlanStep): Promise<RetrievalOperationResult> {
+    const nodeId = this.extractStepNodeIds(step)[0];
+    if (!nodeId) {
+      return {
+        items: [],
+        warnings: ['No disease seed entity was available for disease-network construction.'],
+      };
+    }
+
+    const relationshipTypes =
+      ((step.params.relationshipTypes as string[] | undefined) ?? []).length > 0
+        ? ((step.params.relationshipTypes as string[] | undefined) ?? [])
+        : ['ASSOCIATED_WITH', 'CAUSAL_TO', 'INTERACTS_WITH', 'PARTICIPATES_IN', 'INVOLVED_IN'];
+
+    const [details, genes, phenotypes] = await Promise.all([
+      this.getNodeDetails([nodeId]),
+      this.getRelatedEntities(nodeId, ['Gene', 'Protein'], relationshipTypes, Number(step.params.limit ?? 16)),
+      this.getRelatedEntities(nodeId, ['Phenotype', 'Pathway', 'Drug'], relationshipTypes, 12),
+    ]);
+    const graph = await this.optimusKgService.expandSubgraph(
+      [nodeId],
+      2,
+      Number(step.params.maxNodes ?? 96),
+      18,
+      relationshipTypes,
+      (step.params.nodeTypes as string[] | undefined) ?? [],
+    );
+
+    return this.mergeOperationResults([
+      details,
+      genes,
+      phenotypes,
+      {
+        items: [this.graphToEvidence(step.id, 'query', step.description, graph, 0.84)],
+        graph,
+        highlightNodeIds: [nodeId],
+      },
+    ]);
+  }
+
+  private async buildGeneNetwork(step: RetrievalPlanStep): Promise<RetrievalOperationResult> {
+    const nodeId = this.extractStepNodeIds(step)[0];
+    if (!nodeId) {
+      return {
+        items: [],
+        warnings: ['No gene or protein seed entity was available for gene-network construction.'],
+      };
+    }
+
+    const relationshipTypes =
+      ((step.params.relationshipTypes as string[] | undefined) ?? []).length > 0
+        ? ((step.params.relationshipTypes as string[] | undefined) ?? [])
+        : ['ASSOCIATED_WITH', 'INTERACTS_WITH', 'PARTICIPATES_IN', 'INVOLVED_IN', 'TARGET_OF'];
+
+    const [details, diseases, pathways] = await Promise.all([
+      this.getNodeDetails([nodeId]),
+      this.getRelatedEntities(nodeId, ['Disease', 'Phenotype'], relationshipTypes, 12),
+      this.getRelatedEntities(
+        nodeId,
+        ['Pathway', 'BiologicalProcess', 'MolecularFunction', 'CellularComponent'],
+        relationshipTypes,
+        Number(step.params.limit ?? 16),
+      ),
+    ]);
+    const graph = await this.optimusKgService.expandSubgraph(
+      [nodeId],
+      2,
+      Number(step.params.maxNodes ?? 88),
+      18,
+      relationshipTypes,
+      (step.params.nodeTypes as string[] | undefined) ?? [],
+    );
+
+    return this.mergeOperationResults([
+      details,
+      diseases,
+      pathways,
+      {
+        items: [this.graphToEvidence(step.id, 'query', step.description, graph, 0.84)],
+        graph,
+        highlightNodeIds: [nodeId],
+      },
+    ]);
+  }
+
+  private async buildDrugNetwork(step: RetrievalPlanStep): Promise<RetrievalOperationResult> {
+    const nodeId = this.extractStepNodeIds(step)[0];
+    if (!nodeId) {
+      return {
+        items: [],
+        warnings: ['No drug or therapeutic seed entity was available for drug-network construction.'],
+      };
+    }
+
+    const relationshipTypes =
+      ((step.params.relationshipTypes as string[] | undefined) ?? []).length > 0
+        ? ((step.params.relationshipTypes as string[] | undefined) ?? [])
+        : ['TARGETS', 'TARGET_OF', 'TREATS', 'INDICATED_FOR', 'ASSOCIATED_WITH', 'INTERACTS_WITH'];
+
+    const [details, targets, indications] = await Promise.all([
+      this.getNodeDetails([nodeId]),
+      this.getRelatedEntities(nodeId, ['Gene', 'Protein', 'Pathway'], relationshipTypes, Number(step.params.limit ?? 14)),
+      this.getRelatedEntities(nodeId, ['Disease', 'Phenotype'], relationshipTypes, 12),
+    ]);
+    const graph = await this.optimusKgService.expandSubgraph(
+      [nodeId],
+      2,
+      Number(step.params.maxNodes ?? 88),
+      18,
+      relationshipTypes,
+      (step.params.nodeTypes as string[] | undefined) ?? [],
+    );
+
+    return this.mergeOperationResults([
+      details,
+      targets,
+      indications,
+      {
+        items: [this.graphToEvidence(step.id, 'query', step.description, graph, 0.84)],
+        graph,
+        highlightNodeIds: [nodeId],
+      },
+    ]);
+  }
+
+  private async buildPathwayNetwork(step: RetrievalPlanStep): Promise<RetrievalOperationResult> {
+    const nodeId = this.extractStepNodeIds(step)[0];
+    if (!nodeId) {
+      return {
+        items: [],
+        warnings: ['No pathway or process seed entity was available for pathway-network construction.'],
+      };
+    }
+
+    const relationshipTypes =
+      ((step.params.relationshipTypes as string[] | undefined) ?? []).length > 0
+        ? ((step.params.relationshipTypes as string[] | undefined) ?? [])
+        : ['PARTICIPATES_IN', 'INVOLVED_IN', 'ASSOCIATED_WITH', 'INTERACTS_WITH'];
+
+    const [details, genes, diseases] = await Promise.all([
+      this.getNodeDetails([nodeId]),
+      this.getRelatedEntities(nodeId, ['Gene', 'Protein'], relationshipTypes, Number(step.params.limit ?? 14)),
+      this.getRelatedEntities(nodeId, ['Disease', 'Drug', 'Phenotype'], relationshipTypes, 12),
+    ]);
+    const graph = await this.optimusKgService.expandSubgraph(
+      [nodeId],
+      2,
+      Number(step.params.maxNodes ?? 88),
+      18,
+      relationshipTypes,
+      (step.params.nodeTypes as string[] | undefined) ?? [],
+    );
+
+    return this.mergeOperationResults([
+      details,
+      genes,
+      diseases,
+      {
+        items: [this.graphToEvidence(step.id, 'query', step.description, graph, 0.84)],
+        graph,
+        highlightNodeIds: [nodeId],
+      },
+    ]);
+  }
+
+  private async buildRelationshipNetwork(step: RetrievalPlanStep): Promise<RetrievalOperationResult> {
+    const sourceId = String(step.params.sourceId ?? '');
+    const targetId = String(step.params.targetId ?? '');
+    if (!sourceId || !targetId) {
+      return {
+        items: [],
+        warnings: ['Two resolved seed entities are required for relationship-network construction.'],
+      };
+    }
+
+    const relationshipTypes = (step.params.relationshipTypes as string[] | undefined) ?? [];
+    const [details, directEvidence, shortestPath] = await Promise.all([
+      this.getNodeDetails([sourceId, targetId]),
+      this.retrieveEvidenceBetweenNodes(sourceId, targetId, [], 8),
+      this.findShortestPath(sourceId, targetId, 6),
+    ]);
+    const graph = await this.optimusKgService.expandSubgraph(
+      [sourceId, targetId],
+      1,
+      Number(step.params.maxNodes ?? 96),
+      16,
+      relationshipTypes,
+      (step.params.nodeTypes as string[] | undefined) ?? [],
+    );
+
+    return this.mergeOperationResults([
+      details,
+      directEvidence,
+      shortestPath,
+      {
+        items: [this.graphToEvidence(step.id, 'query', step.description, graph, 0.88)],
+        graph,
+        highlightNodeIds: [sourceId, targetId],
+      },
+    ]);
+  }
+
+  private async buildMultiEntityNetwork(step: RetrievalPlanStep): Promise<RetrievalOperationResult> {
+    const nodeIds = this.extractStepNodeIds(step);
+    if (nodeIds.length === 0) {
+      return {
+        items: [],
+        warnings: ['No resolved seed entities were available for multi-entity network construction.'],
+      };
+    }
+
+    const relationshipTypes = (step.params.relationshipTypes as string[] | undefined) ?? [];
+    const nodeTypes = (step.params.nodeTypes as string[] | undefined) ?? [];
+    const aggregateMode = String(step.params.aggregateMode ?? 'union') === 'shared' ? 'shared' : 'union';
+    const [details, related] = await Promise.all([
+      this.getNodeDetails(nodeIds.slice(0, 6)),
+      this.getRelatedEntitiesForNodeSet(
+        nodeIds,
+        nodeTypes,
+        relationshipTypes,
+        aggregateMode,
+        Number(step.params.minSupport ?? 1),
+        Number(step.params.limit ?? 20),
+      ),
+    ]);
+    const graph = await this.optimusKgService.expandSubgraph(
+      nodeIds,
+      1,
+      Number(step.params.maxNodes ?? 120),
+      18,
+      relationshipTypes,
+      nodeTypes,
+    );
+
+    return this.mergeOperationResults([
+      details,
+      related,
+      {
+        items: [this.graphToEvidence(step.id, 'query', step.description, graph, 0.86)],
+        graph,
+        highlightNodeIds: nodeIds.slice(0, 8),
+      },
+    ]);
+  }
+
+  private extractStepNodeIds(step: RetrievalPlanStep) {
+    const explicitNodeIds = Array.isArray(step.params.nodeIds)
+      ? (step.params.nodeIds as string[]).map((nodeId) => String(nodeId)).filter((nodeId) => nodeId.trim().length > 0)
+      : [];
+    const sourceId = typeof step.params.sourceId === 'string' ? step.params.sourceId.trim() : '';
+    const targetId = typeof step.params.targetId === 'string' ? step.params.targetId.trim() : '';
+
+    return Array.from(new Set([...explicitNodeIds, sourceId, targetId].filter((nodeId) => nodeId.length > 0)));
+  }
+
+  private mergeOperationResults(results: RetrievalOperationResult[]): RetrievalOperationResult {
+    const items = results.flatMap((result) => result.items);
+    const warnings = Array.from(new Set(results.flatMap((result) => result.warnings ?? [])));
+    const graphs = results.map((result) => result.graph).filter((graph): graph is SerializedGraphPayload => Boolean(graph));
+    const highlightNodeIds = Array.from(
+      new Set(results.flatMap((result) => result.highlightNodeIds ?? [])),
+    ).slice(0, 20);
+    const highlightPath = results.find((result) => result.highlightPath)?.highlightPath;
+
+    return {
+      items,
+      graph: this.mergeSerializedGraphs(graphs),
+      highlightNodeIds: highlightNodeIds.length > 0 ? highlightNodeIds : undefined,
+      highlightPath,
+      warnings,
+    };
+  }
+
+  private mergeSerializedGraphs(graphs: SerializedGraphPayload[]) {
+    if (graphs.length === 0) {
+      return undefined;
+    }
+
+    const nodeMap = new Map<string, SerializedGraphPayload['nodes'][number]>();
+    const edgeMap = new Map<string, SerializedGraphPayload['edges'][number]>();
+    let truncated = false;
+    const expandedFromNodeIds = new Set<string>();
+    let centerNodeId: string | undefined;
+    let radius = 1;
+
+    for (const graph of graphs) {
+      for (const node of graph.nodes) {
+        if (!nodeMap.has(node.key)) {
+          nodeMap.set(node.key, node);
+        }
+      }
+      for (const edge of graph.edges) {
+        if (!edgeMap.has(edge.key)) {
+          edgeMap.set(edge.key, edge);
+        }
+      }
+      truncated = truncated || graph.attributes.truncated === true;
+      if (!centerNodeId && typeof graph.attributes.centerNodeId === 'string') {
+        centerNodeId = String(graph.attributes.centerNodeId);
+      }
+      if (typeof graph.attributes.radius === 'number') {
+        radius = Math.max(radius, Math.trunc(graph.attributes.radius));
+      }
+      if (Array.isArray(graph.attributes.expandedFromNodeIds)) {
+        for (const nodeId of graph.attributes.expandedFromNodeIds) {
+          expandedFromNodeIds.add(String(nodeId));
+        }
+      }
+    }
+
+    return {
+      nodes: [...nodeMap.values()],
+      edges: [...edgeMap.values()],
+      attributes: compactRecord({
+        centerNodeId,
+        radius,
+        expandedFromNodeIds: [...expandedFromNodeIds],
+        truncated,
+      }),
+      options: {
+        type: 'mixed' as const,
+        multi: true as const,
+        allowSelfLoops: true as const,
+      },
+    };
   }
 
   private async getNodeDetails(nodeIds: string[]) {

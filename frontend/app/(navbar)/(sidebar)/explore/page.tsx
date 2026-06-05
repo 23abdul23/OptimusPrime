@@ -2,7 +2,7 @@
 
 import { useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
-import { Chat } from '@/components/chat';
+import { ExploreKGChat } from '@/components/chat/ExploreKGChat';
 import { KnowledgeGraphTab } from '@/components/explore';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
@@ -56,7 +56,7 @@ function ExploreContent() {
           <KnowledgeGraphTab />
         </TabsContent>
       </Tabs>
-      <Chat />
+      <ExploreKGChat />
     </div>
   );
 }

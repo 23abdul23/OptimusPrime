@@ -11,25 +11,30 @@
    - whether entity extraction should run
    - whether entity resolution should run
    - whether graph context is required
+   - whether the request should enter empty-canvas discovery mode
 3. `GraphContextAgentService` resolves the active graph subject.
 4. `EntityExtractionService` runs only when the router requires it.
 5. `IntentAgentService` classifies the request family.
 6. `EntityResolutionAgentService` runs only when the router requires it.
-7. `RetrievalPlanningAgentService` creates typed plan steps.
-8. `GraphRetrieverService` dispatches each step to:
+7. For discovery-mode requests with no active graph, the orchestrator can ask for clarification before planning if:
+   - the request is too broad
+   - the seed mention is ambiguous in OptimusKG
+8. `RetrievalPlanningAgentService` creates typed plan steps.
+9. `GraphRetrieverService` dispatches each step to:
    - `GraphAnalysisService`
    - `RetrievalOperationsService`
    - `CypherAgentService`
-9. `EvidenceAgentService` builds the evidence bundle and decides whether bounded replanning is needed.
-10. `ReplanningAgentService` optionally appends follow-up steps.
-11. `ReasoningAgentService` writes the final grounded answer.
-12. `ConversationGraphStateService` persists the new session state.
+10. `EvidenceAgentService` builds the evidence bundle and decides whether bounded replanning is needed.
+11. `ReplanningAgentService` optionally appends follow-up steps.
+12. `ReasoningAgentService` writes the final grounded answer.
+13. `ConversationGraphStateService` persists the new session state.
 
 ## Graph Context Priority
 The planner and graph-analysis executor use this order:
 1. Selected graph
 2. Visible graph
 3. Session graph
+4. Discovery mode when no graph context exists
 
 ## Stage Gating
 ### Graph-subject query
@@ -53,6 +58,18 @@ Example: `Which diseases are associated with APOE?`
 - Extraction and resolution both run
 - Planner emits entity-anchored retrieval steps
 
+### Discovery query
+Example: `Build a graph for genes associated with Alzheimer disease`
+- Router marks the request as `GRAPH_DISCOVERY_QUERY`
+- The active graph scope is `discovery`
+- Extraction and resolution run because the graph does not yet exist
+- The orchestrator may stop for broad-query or ambiguity clarification
+- Planner emits a compact network-build step such as:
+  - `build-disease-network`
+  - `build-gene-network`
+  - `build-relationship-network`
+  - `build-multi-entity-network`
+
 ## Execution Paths
 ### Graph analysis path
 Used for:
@@ -73,6 +90,7 @@ Used for:
 - typed entity traversals
 - drug, disease, gene, pathway, anatomy, and exposure lookups
 - candidate ranking and ambiguity support
+- empty-canvas graph discovery and compact initial network generation
 
 ### Cypher path
 Used only for explicit Cypher-style requests after validation.

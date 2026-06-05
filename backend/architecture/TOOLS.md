@@ -88,6 +88,15 @@ Owned by `RetrievalOperationsService`.
 - `resolveEntity`
 - `getNodeDetails`
 
+### Composite discovery tools
+- `discoverGraph`
+- `buildDiseaseNetwork`
+- `buildGeneNetwork`
+- `buildDrugNetwork`
+- `buildPathwayNetwork`
+- `buildRelationshipNetwork`
+- `buildMultiEntityNetwork`
+
 ### Core graph retrieval
 - `retrieveEvidence`
 - `shortestPath`
@@ -137,5 +146,6 @@ Used by the orchestrator for network-summary and state-aware flows.
 ## Tool Selection Rules
 - Prefer graph-analysis tools for selected graph, visible graph, or session graph analysis.
 - Prefer retrieval-operation tools for resolved entity lookup and typed traversals.
+- Prefer composite discovery tools when the graph is empty and the agent needs to generate the first useful network from resolved seed entities.
 - Use `executeGuardedCypher` only for explicit Cypher-style requests.
 - Do not route graph-subject queries through entity resolution unless explicit non-graph entities must be resolved.

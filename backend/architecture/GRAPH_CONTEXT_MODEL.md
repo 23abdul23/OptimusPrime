@@ -50,6 +50,16 @@ Stored fields:
 Rule:
 - session graph is the fallback only when neither selected graph nor visible graph is available
 
+### Discovery mode
+Comes into play when:
+- `selectedNodeContext` is empty
+- `selectedEdgeContext` is empty
+- visible graph node count is zero
+- no active session graph is being referenced as the subject
+
+Rule:
+- discovery mode is the final fallback when the user wants the agent to create the first useful graph from query-resolved seed entities
+
 ## Graph Scope Modes
 ### `selection`
 Used when the request is anchored to selected nodes or edges.
@@ -59,6 +69,9 @@ Used when the user refers to the graph/network and no stronger selection anchor 
 
 ### `session`
 Used when the user refers to prior graph context and current frontend graph context is absent.
+
+### `discovery`
+Used when the frontend graph is effectively empty and the request should generate a new compact network instead of analyzing an existing one.
 
 ### `none`
 Used when no graph context is available.
@@ -79,13 +92,16 @@ Used when no graph context is available.
 ## Planner Rules
 - Selected graph takes priority over visible graph.
 - Visible graph takes priority over session graph.
+- Session graph takes priority over discovery mode.
 - Graph-wide analysis uses graph ids directly; it does not require explicit anchor entity resolution.
 - Entity queries may still use graph context for disambiguation and ranking.
 - Mixed queries combine selected or visible graph context with resolved explicit entities.
+- Discovery queries generate a new graph only after explicit seed entities have been resolved or clarified.
 
 ## Ambiguity Rules
 - If explicit mention matching is ambiguous inside the visible graph, visible-graph matches are preferred before global OptimusKG resolution.
 - If a graph-subject query has enough selected or visible graph context, the system should not manufacture entity mentions from verbs such as `summarize`, `compare`, or `describe`.
+- If the graph is empty and the query is broad or ambiguous, the system should clarify before graph generation instead of choosing arbitrary seed entities.
 
 ## Current Frontend Contract
 For correct graph-aware planning, the frontend is expected to send:

@@ -11,7 +11,7 @@ The OptimusKG graph agent is implemented as a single NestJS module with speciali
 
 ## Implemented Backend Services
 - `QueryRouterService`
-  Decides query category, graph-vs-entity strategy, and whether extraction and resolution are required.
+  Decides query category, graph-vs-entity strategy, whether extraction and resolution are required, and whether the request should enter empty-canvas graph discovery mode.
 - `GraphContextAgentService`
   Resolves the active graph subject from selected graph, visible graph, or session graph.
 - `EntityExtractionService`
@@ -19,13 +19,13 @@ The OptimusKG graph agent is implemented as a single NestJS module with speciali
 - `IntentAgentService`
   Classifies the request into operational intent families.
 - `EntityResolutionAgentService`
-  Resolves explicit mentions against OptimusKG metadata and aliases.
+  Resolves explicit mentions against OptimusKG metadata and aliases, and can surface candidate lists for discovery-time ambiguity clarification.
 - `RetrievalPlanningAgentService`
-  Emits typed plan steps with executor, operation, tool, and parameters.
+  Emits typed plan steps with executor, operation, tool, and parameters, including composite graph-discovery network builders for empty sessions.
 - `GraphAnalysisService`
   Primary executor for graph-wide analysis, visible-network analysis, selected-subgraph analysis, topology analysis, ontology traversal, enrichment, community detection, and graph explanation.
 - `RetrievalOperationsService`
-  Primary executor for entity-anchored typed retrieval operations and guarded traversal helpers.
+  Primary executor for entity-anchored typed retrieval operations, composite discovery-network builders, and guarded traversal helpers.
 - `CypherAgentService`
   Validates and executes explicit read-only Cypher when the request is intentionally Cypher-oriented.
 - `GraphRetrieverService`
@@ -50,18 +50,23 @@ The OptimusKG graph agent is implemented as a single NestJS module with speciali
    - selected graph
    - visible graph
    - session graph
+   - discovery mode when no graph context exists
 4. Extraction and resolution run only when the router requires them.
-5. Planner emits typed plan steps.
-6. Retriever executes those steps through one of:
+5. For empty-canvas requests, the orchestrator can stop early for:
+   - broad-query clarification
+   - ambiguous seed clarification
+6. Planner emits typed plan steps.
+7. Retriever executes those steps through one of:
    - `graph-analysis`
    - `retrieval-operations`
    - `cypher-agent`
-7. Evidence agent bundles results and may request bounded replanning.
-8. Reasoning agent writes the answer and graph actions.
-9. Session graph state is updated in Redis.
+8. Evidence agent bundles results and may request bounded replanning.
+9. Reasoning agent writes the answer and graph actions.
+10. Session graph state is updated in Redis.
 
 ## Current Query Families
 - Graph summary and graph explanation
+- Empty-canvas graph discovery and initial network generation
 - Schema analysis and node-type analysis
 - Relationship analysis and cross-type connection analysis
 - Network statistics and topology inspection
@@ -78,6 +83,7 @@ The OptimusKG graph agent is implemented as a single NestJS module with speciali
 - Graph-wide analysis no longer requires explicit node selection when a visible graph exists.
 - Query routing can skip extraction and resolution entirely for graph-subject queries.
 - Selected graph context is treated as primary planning context.
+- When no selected, visible, or session graph exists, the system can generate a first graph from resolved query seeds instead of forcing the user to build the graph manually.
 - Generic neighborhood loading is now the fallback, not the default.
 
 ## Current Limitations

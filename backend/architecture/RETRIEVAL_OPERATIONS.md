@@ -12,6 +12,7 @@ For graph-wide operations, the planner resolves scope in this order:
 1. selected graph
 2. visible graph
 3. session graph
+4. discovery mode when no graph exists yet
 
 This scope is then passed to `GraphAnalysisService`.
 
@@ -103,6 +104,15 @@ Owned by `RetrievalOperationsService`.
 - `retrieve-neighborhood`
 - `expand-network`
 
+### Composite discovery operations
+- `discover-graph`
+- `build-disease-network`
+- `build-gene-network`
+- `build-drug-network`
+- `build-pathway-network`
+- `build-relationship-network`
+- `build-multi-entity-network`
+
 ### General typed retrieval
 - `get-related-entities`
 - `get-related-diseases`
@@ -170,7 +180,11 @@ The current implementation supports guarded execution of explicit read-only Cyph
 - `path-search`
 - `exposure-analysis`
 
+### Empty-canvas discovery family
+- `graph-discovery`
+
 ## Fallback Policy
 - Use a typed graph-analysis operation when the subject is the selected graph, visible graph, or session graph.
 - Use typed retrieval when the subject is a resolved entity or resolved set of entities.
+- Use composite discovery operations when the canvas is empty and the agent needs to generate the first useful graph from resolved seed entities.
 - Use neighborhood loading only when no more specific operation is appropriate.

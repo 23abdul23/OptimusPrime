@@ -69,6 +69,7 @@ const OPTIMUS_PATH_EDGE_COLOR = '#ea580c';
 const OPTIMUS_PREVIEW_NODE_COLOR = '#0ea5e9';
 const OPTIMUS_PREVIEW_BORDER_COLOR = '#0369a1';
 const VALID_NODE_TYPES = new Set<NodeAttributes['type']>(['circle', 'border', 'highlight', 'normal']);
+const SIGMA_SAFE_NODE_TYPES = new Set<NodeAttributes['type']>(['border', 'highlight', 'normal']);
 
 function apiBaseUrl() {
   return envURL(process.env.NEXT_PUBLIC_BACKEND_URL);
@@ -96,12 +97,13 @@ function mergeNode(
   key: string,
   attributes: Record<string, unknown>,
 ) {
+  const normalizedAttributes = normalizeOptimusNodeAttributes(attributes);
   if (graph.hasNode(key)) {
-    graph.mergeNodeAttributes(key, attributes);
+    graph.mergeNodeAttributes(key, normalizedAttributes);
     return;
   }
 
-  graph.addNode(key, attributes);
+  graph.addNode(key, normalizedAttributes);
 }
 
 function ensureVisibleNodePositions(graph: Graph<NodeAttributes, EdgeAttributes>) {
@@ -142,6 +144,21 @@ function ensureVisibleNodePositions(graph: Graph<NodeAttributes, EdgeAttributes>
     graph.setNodeAttribute(nodeId, 'x', centerX + Math.cos(angle) * radius);
     graph.setNodeAttribute(nodeId, 'y', centerY + Math.sin(angle) * radius);
   });
+}
+
+function normalizeOptimusNodeAttributes(attributes: Record<string, unknown>) {
+  const normalizedAttributes = { ...attributes };
+  const nodeType = normalizedAttributes.type as NodeAttributes['type'] | undefined;
+  if (!nodeType || !VALID_NODE_TYPES.has(nodeType)) {
+    normalizedAttributes.type = 'border';
+    return normalizedAttributes;
+  }
+
+  if (!SIGMA_SAFE_NODE_TYPES.has(nodeType)) {
+    normalizedAttributes.type = 'border';
+  }
+
+  return normalizedAttributes;
 }
 
 function focusCameraOnNodes(

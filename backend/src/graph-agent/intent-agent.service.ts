@@ -314,6 +314,16 @@ export class IntentAgentService {
       };
     }
 
+    if (queryRoute.category === 'GRAPH_DISCOVERY_QUERY') {
+      return {
+        primary: 'graph-discovery',
+        operation: 'graph-discovery',
+        requestedEntityTypes,
+        allowContextFallback: true,
+        radius,
+      };
+    }
+
     return {
       primary: 'entity-neighborhood',
       operation: 'neighborhood',

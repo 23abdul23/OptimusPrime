@@ -60,6 +60,13 @@ export class EvidenceAgentService {
   }): GraphEvidenceAssessment {
     const analyticalOperations = params.plan.filter((step) =>
       [
+        'discover-graph',
+        'build-disease-network',
+        'build-gene-network',
+        'build-drug-network',
+        'build-pathway-network',
+        'build-relationship-network',
+        'build-multi-entity-network',
         'get-related-entities',
         'get-related-diseases',
         'get-related-genes',
@@ -139,6 +146,13 @@ export class EvidenceAgentService {
 
         if (
           [
+            'discover-graph',
+            'build-disease-network',
+            'build-gene-network',
+            'build-drug-network',
+            'build-pathway-network',
+            'build-relationship-network',
+            'build-multi-entity-network',
             'retrieve-relationship-evidence',
             'find-shortest-path',
             'find-common-neighbors',

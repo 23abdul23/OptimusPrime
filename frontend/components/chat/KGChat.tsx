@@ -3,9 +3,15 @@
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
 import { BookmarkIcon, BugIcon, CheckIcon, ChevronDownIcon, LightbulbIcon, Loader2Icon, RefreshCcwIcon } from 'lucide-react';
+import { usePathname, useRouter } from 'next/navigation';
 import React from 'react';
 import { toast } from 'sonner';
 import { LLM_MODELS } from '@/lib/data';
+import {
+  clearGraphAgentHandoffSnapshot,
+  loadGraphAgentHandoffSnapshot,
+  saveGraphAgentHandoffSnapshot,
+} from '@/lib/graph-agent-handoff';
 import type {
   GraphAction,
   GraphAgentUIMessage,
@@ -793,18 +799,24 @@ function buildGraphAgentContext(
 }
 
 export function KGChat({ onChatOpen, children }: KGChatProps) {
+  const router = useRouter();
+  const pathname = usePathname();
   const [model, setModel] = React.useState<(typeof LLM_MODELS)[number]['id']>(LLM_MODELS[0].id);
   const [modelSelectorOpen, setModelSelectorOpen] = React.useState(false);
   const [checkpoints, setCheckpoints] = React.useState<CheckpointType[]>([]);
   const [draftText, setDraftText] = React.useState('');
+  const [handoffState, setHandoffState] = React.useState<null | { message: string }>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const processedActionIds = React.useRef<Set<string>>(new Set());
+  const handoffTriggered = React.useRef(false);
+  const restoredHandoffSnapshot = React.useRef(false);
   const sigmaInstance = useKGStore((state) => state.sigmaInstance);
+  const setGraphSelection = useKGStore((state) => state.setGraphSelection);
   const selectedNodes = useKGStore((state) => state.selectedNodes);
   const selectedEdges = useKGStore((state) => state.selectedEdges);
   const [lastDebugPayload, setLastDebugPayload] = React.useState<GraphAgentDebugPayload | null>(null);
 
-  const sessionId = React.useMemo(() => generateSessionId(), []);
+  const [sessionId, setSessionId] = React.useState(() => generateSessionId());
   const liveContext = React.useMemo(
     () => buildGraphAgentContext(selectedNodes, selectedEdges, sigmaInstance),
     [selectedNodes, selectedEdges, sigmaInstance],
@@ -829,6 +841,26 @@ export function KGChat({ onChatOpen, children }: KGChatProps) {
       });
     },
   });
+
+  React.useEffect(() => {
+    if (restoredHandoffSnapshot.current || pathname !== '/knowledge-graph') {
+      return;
+    }
+
+    restoredHandoffSnapshot.current = true;
+    const snapshot = loadGraphAgentHandoffSnapshot();
+    if (!snapshot) {
+      return;
+    }
+
+    setSessionId(snapshot.sessionId);
+    if (LLM_MODELS.some((candidate) => candidate.id === snapshot.model)) {
+      setModel(snapshot.model as (typeof LLM_MODELS)[number]['id']);
+    }
+    setMessages(snapshot.messages);
+    onChatOpen?.(true);
+    clearGraphAgentHandoffSnapshot();
+  }, [onChatOpen, pathname, setMessages]);
   const latestEvidence = React.useMemo(() => {
     for (const message of [...messages].reverse()) {
       for (const part of [...message.parts].reverse()) {
@@ -890,10 +922,24 @@ export function KGChat({ onChatOpen, children }: KGChatProps) {
                 action.mode,
                 action.highlightNodeIds ?? [],
               );
+              if ((action.highlightNodeIds ?? []).length > 0) {
+                setGraphSelection({
+                  nodeIds: action.highlightNodeIds ?? [],
+                  edgeIds: [],
+                });
+              }
             } else if (action.type === 'highlight-path') {
               highlightOptimusPath(sigmaInstance, action.nodeIds, action.edgeIds);
+              setGraphSelection({
+                nodeIds: action.nodeIds,
+                edgeIds: action.edgeIds,
+              });
             } else if (action.type === 'focus-nodes') {
               focusOptimusNodes(sigmaInstance, action.nodeIds);
+              setGraphSelection({
+                nodeIds: action.nodeIds,
+                edgeIds: [],
+              });
             }
           }
         }
@@ -901,7 +947,55 @@ export function KGChat({ onChatOpen, children }: KGChatProps) {
     };
 
     void applyActions();
-  }, [messages, sigmaInstance]);
+  }, [messages, setGraphSelection, sigmaInstance]);
+
+  React.useEffect(() => {
+    if (pathname !== '/explore' || handoffTriggered.current) {
+      return;
+    }
+    if (status === 'submitted' || status === 'streaming') {
+      return;
+    }
+
+    const latestAssistant = [...messages].reverse().find((message) => message.role === 'assistant');
+    if (!latestAssistant) {
+      return;
+    }
+
+    const actionsPart = [...latestAssistant.parts].reverse().find(isGraphActionsPart);
+    const statePart = [...latestAssistant.parts].reverse().find(isGraphStatePart);
+    if (!actionsPart || !statePart) {
+      return;
+    }
+
+    const generatedGraphAction = actionsPart.data.find(
+      (action) =>
+        action.type === 'load-subgraph' &&
+        (action.graph.nodes.length > 1 || action.graph.edges.length > 0),
+    );
+    if (!generatedGraphAction) {
+      return;
+    }
+
+    handoffTriggered.current = true;
+    saveGraphAgentHandoffSnapshot({
+      createdAt: new Date().toISOString(),
+      sourceRoute: '/explore',
+      sessionId: statePart.data.sessionId || sessionId,
+      model,
+      messages,
+    });
+    setHandoffState({ message: 'Generating your graph...' });
+    onChatOpen?.(true);
+
+    const transitionTimeout = window.setTimeout(() => {
+      router.push('/knowledge-graph');
+    }, 180);
+
+    return () => {
+      window.clearTimeout(transitionTimeout);
+    };
+  }, [messages, model, onChatOpen, pathname, router, sessionId, status]);
 
   const createCheckpoint = React.useCallback((messageIndex: number) => {
     const checkpoint: CheckpointType = {
@@ -1240,6 +1334,15 @@ export function KGChat({ onChatOpen, children }: KGChatProps) {
           renderPromptInput,
           renderDebugPanel,
         })}
+        {handoffState && (
+          <div className='fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/65 backdrop-blur-sm'>
+            <div className='flex min-w-[280px] flex-col items-center gap-3 rounded-2xl border border-sky-200/20 bg-slate-900 px-8 py-7 text-center text-white shadow-2xl'>
+              <Loader2Icon className='size-8 animate-spin text-sky-300' />
+              <div className='font-semibold text-lg'>Loading Knowledge Graph</div>
+              <div className='text-sm text-slate-300'>{handoffState.message}</div>
+            </div>
+          </div>
+        )}
       </>
     );
   }

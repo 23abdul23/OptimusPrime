@@ -6,6 +6,7 @@ Keep the current single NestJS orchestrator, but continue to strengthen the spec
 ## What Is Already In Place
 - router-gated extraction and resolution
 - graph-context-first planning
+- empty-canvas graph discovery with clarification-before-expansion
 - dedicated graph analysis executor
 - dedicated typed retrieval executor
 - guarded Cypher boundary
@@ -28,6 +29,7 @@ Keep the current single NestJS orchestrator, but continue to strengthen the spec
 - more explicit executor scoring before the plan is emitted
 - richer operation composition for multi-step graph-wide questions
 - better planner verification against actual graph scope
+- stronger discovery planning for broad-topic queries and compact first-graph generation
 
 ### Better evidence grounding
 - provenance-aware scoring across more tool families
@@ -54,9 +56,10 @@ Keep the current single NestJS orchestrator, but continue to strengthen the spec
 The graph agent should answer most KG questions through:
 1. graph context resolution
 2. typed intent classification
-3. typed operation planning
-4. graph-native execution
-5. explicit evidence assessment
-6. grounded response synthesis
+3. clarification before expansion when the graph is empty and the request is too broad or ambiguous
+4. typed operation planning
+5. graph-native execution
+6. explicit evidence assessment
+7. grounded response synthesis
 
 The visible graph and selected graph should remain first-class subjects throughout that flow.

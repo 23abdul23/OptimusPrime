@@ -131,6 +131,7 @@ export class QueryRouterService {
       (params.networkContext?.totalNodes ?? 0) > 0 ||
       (params.networkContext?.visibleNodeIds?.length ?? 0) > 0 ||
       (params.networkContext?.visibleEdgeIds?.length ?? 0) > 0;
+    const hasDiscoveryTrigger = !hasSelectionContext && !hasVisibleGraphContext;
     const reasons: string[] = [];
 
     const hasCypherSignal = CYPHER_PATTERNS.some((pattern) => pattern.test(query));
@@ -148,6 +149,7 @@ export class QueryRouterService {
         hasExplicitEntitySignal: false,
         hasCypherSignal: true,
         hasSelectionContext,
+        hasDiscoveryTrigger: false,
       });
     }
 
@@ -172,6 +174,9 @@ export class QueryRouterService {
     }
     if (hasVisibleGraphContext) {
       reasons.push('request-carries-visible-graph-context');
+    }
+    if (hasDiscoveryTrigger) {
+      reasons.push('request-has-no-active-graph-context');
     }
     if (referencesSelectionSubject) {
       reasons.push('selected-graph-context-is-primary-subject');
@@ -199,6 +204,7 @@ export class QueryRouterService {
         hasExplicitEntitySignal,
         hasCypherSignal: false,
         hasSelectionContext: true,
+        hasDiscoveryTrigger: false,
       });
     }
 
@@ -215,6 +221,7 @@ export class QueryRouterService {
         hasExplicitEntitySignal: false,
         hasCypherSignal: false,
         hasSelectionContext: true,
+        hasDiscoveryTrigger: false,
       });
     }
 
@@ -231,6 +238,24 @@ export class QueryRouterService {
         hasExplicitEntitySignal: true,
         hasCypherSignal: false,
         hasSelectionContext,
+        hasDiscoveryTrigger: false,
+      });
+    }
+
+    if (hasDiscoveryTrigger) {
+      return this.createRoute({
+        category: 'GRAPH_DISCOVERY_QUERY',
+        intent: 'graph-discovery',
+        requiresEntityExtraction: true,
+        requiresEntityResolution: true,
+        requiresGraphContext: false,
+        preferredExecutor: 'mixed',
+        reasons,
+        hasGraphReference,
+        hasExplicitEntitySignal,
+        hasCypherSignal: false,
+        hasSelectionContext: false,
+        hasDiscoveryTrigger: true,
       });
     }
 
@@ -247,6 +272,7 @@ export class QueryRouterService {
         hasExplicitEntitySignal: true,
         hasCypherSignal: false,
         hasSelectionContext,
+        hasDiscoveryTrigger: false,
       });
     }
 
@@ -263,6 +289,7 @@ export class QueryRouterService {
         hasExplicitEntitySignal: false,
         hasCypherSignal: false,
         hasSelectionContext,
+        hasDiscoveryTrigger: false,
       });
     }
 
@@ -278,6 +305,7 @@ export class QueryRouterService {
       hasExplicitEntitySignal,
       hasCypherSignal: false,
       hasSelectionContext,
+      hasDiscoveryTrigger: false,
     });
   }
 
@@ -500,6 +528,7 @@ export class QueryRouterService {
     hasExplicitEntitySignal: boolean;
     hasCypherSignal: boolean;
     hasSelectionContext: boolean;
+    hasDiscoveryTrigger: boolean;
   }): QueryRoute {
     return {
       category: params.category,
@@ -514,6 +543,7 @@ export class QueryRouterService {
         hasExplicitEntitySignal: params.hasExplicitEntitySignal,
         hasCypherSignal: params.hasCypherSignal,
         hasSelectionContext: params.hasSelectionContext,
+        hasDiscoveryTrigger: params.hasDiscoveryTrigger,
       },
     };
   }

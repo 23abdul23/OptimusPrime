@@ -10,7 +10,7 @@ import type {
   RetrievalOperation,
   RetrievalPlanStep,
 } from './graph-agent.types';
-import { createStepId } from './graph-agent.utils';
+import { compactRecord, createStepId } from './graph-agent.utils';
 
 @Injectable()
 export class RetrievalPlanningAgentService {
@@ -101,6 +101,62 @@ export class RetrievalPlanningAgentService {
           params: { userQuery: query },
         }),
       ];
+    }
+
+    if (queryRoute.category === 'GRAPH_DISCOVERY_QUERY') {
+      const discoveryEntities = explicitEntities.length > 0 ? explicitEntities : conceptResolvedEntities;
+      const discoveryOperation = this.pickDiscoveryOperation({
+        query,
+        intent,
+        entities: discoveryEntities,
+        primary,
+        secondary,
+      });
+
+      if (discoveryEntities.length === 0 && extractedQuery.mentions.length > 0) {
+        return extractedQuery.mentions.slice(0, 3).map((mention, index) =>
+          this.createStep({
+            prefix: `discovery-candidates-${index}`,
+            intent: 'graph-discovery',
+            operation: 'find-candidate-entities',
+            executor: 'retrieval-operations',
+            tool: 'findCandidateEntities',
+            description: `Find candidate entities for "${mention.text}" before generating a graph.`,
+            params: {
+              query: mention.text,
+              nodeTypes: mention.typeHints,
+              limit: 8,
+            },
+          }),
+        );
+      }
+
+      if (discoveryEntities.length > 0) {
+        return [
+          this.createStep({
+            prefix: `graph-discovery-${discoveryOperation.operation}`,
+            intent: 'graph-discovery',
+            operation: discoveryOperation.operation,
+            executor: 'retrieval-operations',
+            tool: discoveryOperation.tool,
+            description: discoveryOperation.description,
+            params: compactRecord({
+              query,
+              nodeIds: discoveryEntities.map((entity) => entity.id).slice(0, 6),
+              sourceId: primary?.id,
+              targetId: secondary?.id,
+              requestedEntityTypes: intent.requestedEntityTypes,
+              aggregateMode,
+              minSupport: this.pickMinimumSupport(discoveryEntities.length, aggregateMode),
+              relationshipTypes: this.pickRelationshipTypes(query, intent, extractedQuery),
+              nodeTypes: this.pickExpansionNodeTypes(query, intent, discoveryEntities),
+              maxNodes: this.pickDiscoveryMaxNodes(query, discoveryEntities),
+              hops: discoveryOperation.operation === 'discover-graph' ? 1 : 2,
+              limit: 20,
+            }),
+          }),
+        ];
+      }
     }
 
     if (
@@ -1805,5 +1861,102 @@ export class RetrievalPlanningAgentService {
     }
 
     return 'find-common-neighbors' as const;
+  }
+
+  private pickDiscoveryOperation(params: {
+    query: string;
+    intent: QueryIntentClassification;
+    entities: ResolvedEntity[];
+    primary: ResolvedEntity | undefined;
+    secondary: ResolvedEntity | undefined;
+  }) {
+    const { query, intent, entities, primary, secondary } = params;
+    const normalized = query.toLowerCase();
+    const primaryType = primary?.typeName.toLowerCase() ?? '';
+
+    if (
+      primary &&
+      secondary &&
+      ['path-search', 'comparison', 'graph-connections', 'relationship-analysis'].includes(intent.operation)
+    ) {
+      return {
+        operation: 'build-relationship-network' as const,
+        tool: 'buildRelationshipNetwork' as const,
+        description: `Build a focused relationship network connecting ${primary.displayName} and ${secondary.displayName}.`,
+      };
+    }
+
+    if (entities.length > 1) {
+      return {
+        operation: 'build-multi-entity-network' as const,
+        tool: 'buildMultiEntityNetwork' as const,
+        description: `Build a compact network spanning ${entities.slice(0, 4).map((entity) => entity.displayName).join(', ')}.`,
+      };
+    }
+
+    if (
+      primary &&
+      (/(disease|phenotype|syndrome|disorder|dementia|cancer)/i.test(primaryType) ||
+        intent.primary === 'disease-genes' ||
+        /\bdisease\b|\bdementia\b|\balzheimer(?:'s)?\b|\bcancer\b|\bparkinson\b/.test(normalized))
+    ) {
+      return {
+        operation: 'build-disease-network' as const,
+        tool: 'buildDiseaseNetwork' as const,
+        description: `Build a disease-centered network around ${primary.displayName}.`,
+      };
+    }
+
+    if (primary && (intent.operation === 'drug-search' || intent.operation === 'drug-indications' || intent.primary === 'drug-discovery')) {
+      return {
+        operation: 'build-drug-network' as const,
+        tool: 'buildDrugNetwork' as const,
+        description: `Build a drug-centered network around ${primary.displayName}.`,
+      };
+    }
+
+    if (
+      primary &&
+      (intent.operation === 'pathway-search' ||
+        /(pathway|biologicalprocess|molecularfunction|cellularcomponent)/i.test(primaryType))
+    ) {
+      return {
+        operation: 'build-pathway-network' as const,
+        tool: 'buildPathwayNetwork' as const,
+        description: `Build a pathway-centered network around ${primary.displayName}.`,
+      };
+    }
+
+    if (primary && /(gene|protein)/i.test(primaryType)) {
+      return {
+        operation: 'build-gene-network' as const,
+        tool: 'buildGeneNetwork' as const,
+        description: `Build a gene-centered network around ${primary.displayName}.`,
+      };
+    }
+
+    return {
+      operation: 'discover-graph' as const,
+      tool: 'discoverGraph' as const,
+      description:
+        primary
+          ? `Discover a compact graph around ${primary.displayName}.`
+          : 'Discover a compact graph from the resolved query entities.',
+    };
+  }
+
+  private pickDiscoveryMaxNodes(query: string, entities: ResolvedEntity[]) {
+    const normalized = query.toLowerCase();
+    if (/\bsmall\b|\bcompact\b|\bminimal\b/.test(normalized)) {
+      return 60;
+    }
+    if (entities.length >= 3) {
+      return 120;
+    }
+    if (/\bpathway\b|\bmechanism\b|\brelationship\b|\bconnected\b/.test(normalized)) {
+      return 96;
+    }
+
+    return 80;
   }
 }

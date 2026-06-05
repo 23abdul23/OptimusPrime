@@ -87,12 +87,15 @@ export function KGNetworkStyle() {
   useEffect(() => {
     if (!graph) return;
     graph.forEachEdge((edge: string, attributes) => {
-      const color = attributes.color as string;
-      // Parse RGB and apply opacity
-      const rgb = color.match(/\d+/g);
-      if (rgb && rgb.length === 3) {
-        const newColor = `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${edgeOpacity})`;
-        graph.setEdgeAttribute(edge, 'color', newColor);
+      const color = typeof attributes.color === 'string' ? attributes.color : '';
+      if (!color) return;
+
+      const rgbaMatch = color.match(
+        /rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*[\d.]+)?\s*\)/i,
+      );
+      if (rgbaMatch) {
+        const [, red, green, blue] = rgbaMatch;
+        graph.setEdgeAttribute(edge, 'color', `rgba(${red}, ${green}, ${blue}, ${edgeOpacity})`);
       }
     });
   }, [edgeOpacity, graph]);

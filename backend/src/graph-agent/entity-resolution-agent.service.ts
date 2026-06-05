@@ -11,6 +11,22 @@ const STAGED_RESOLUTION_ORDER: ResolutionStage[] = ['exact', 'alias', 'synonym',
 export class EntityResolutionAgentService {
   constructor(private readonly optimusKgService: OptimusKgService) {}
 
+  async findEntityCandidates(query: string, typeHints: string[] = [], limit = 8): Promise<OptimusResolutionCandidate[]> {
+    const candidates = await this.optimusKgService.resolveNodes(
+      this.buildSearchVariants(query, typeHints),
+      Math.max(1, Math.min(25, Math.trunc(limit))),
+      typeHints,
+    );
+    const deduped = new Map<string, OptimusResolutionCandidate>();
+    for (const candidate of candidates) {
+      if (!deduped.has(candidate.id)) {
+        deduped.set(candidate.id, candidate);
+      }
+    }
+
+    return [...deduped.values()].slice(0, Math.max(1, Math.trunc(limit)));
+  }
+
   async resolveEntities(
     mentions: ExtractedMention[],
     concepts: ExtractedConcept[] = [],
@@ -86,6 +102,21 @@ export class EntityResolutionAgentService {
     stage: ResolutionStage,
     conceptConfidence?: number,
   ): ResolvedEntity {
+    const aliases = Array.from(new Set(candidate.aliases.filter((value) => value.trim().length > 0))).slice(0, 12);
+    const identifiers = Array.from(new Set(candidate.sourceIds.filter((value) => value.trim().length > 0))).slice(0, 12);
+    const sourceNames = Array.from(new Set(candidate.sourceNames.filter((value) => value.trim().length > 0))).slice(0, 12);
+    const seedTerms = Array.from(
+      new Set(
+        [
+          candidate.displayName,
+          candidate.symbol,
+          ...aliases,
+          ...identifiers,
+          ...sourceNames,
+        ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0),
+      ),
+    ).slice(0, 20);
+
     return {
       id: candidate.id,
       query,
@@ -96,6 +127,10 @@ export class EntityResolutionAgentService {
       matchedOn: candidate.matchedOn,
       resolutionStage: stage,
       source,
+      aliases,
+      identifiers,
+      sourceNames,
+      seedTerms,
     };
   }
 
