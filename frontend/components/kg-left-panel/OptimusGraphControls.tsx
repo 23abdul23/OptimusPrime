@@ -45,9 +45,9 @@ export function OptimusGraphControls() {
   const [searchQuery, setSearchQuery] = React.useState('');
   const [searchLoading, setSearchLoading] = React.useState(false);
   const [searchResults, setSearchResults] = React.useState<OptimusSearchResult[]>([]);
-  const [radius, setRadius] = React.useState('10');
-  const [maxNodes, setMaxNodes] = React.useState('3000');
-  const [degreeLimit, setDegreeLimit] = React.useState('25');
+  const [radius, setRadius] = React.useState('2');
+  const [maxNodes, setMaxNodes] = React.useState('1500');
+  const [degreeLimit, setDegreeLimit] = React.useState('12');
   const [pathDepth, setPathDepth] = React.useState('6');
   const [pathSourceId, setPathSourceId] = React.useState('');
   const [pathTargetId, setPathTargetId] = React.useState('');

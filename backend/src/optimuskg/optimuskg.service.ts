@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Neo4jService } from '@/neo4j/neo4j.service';
 import { RedisService } from '@/redis/redis.service';
 import neo4j, { type Node as Neo4jNode, type Relationship as Neo4jRelationship } from 'neo4j-driver';
@@ -83,12 +84,12 @@ const MAX_EXPANSION_SEED_COUNT = 5;
 const DEFAULT_SUBGRAPH_HARD_LIMIT = 1500;
 const DEFAULT_DEGREE_LIMIT = 24;
 const FRONTIER_BATCH_LIMIT = 150;
-const QUERY_TIMEOUT_MS = 15000;
 const CACHE_TTL_STATS_SECONDS = 300;
 const CACHE_TTL_RANDOM_SECONDS = 60;
 const CACHE_TTL_SEARCH_SECONDS = 120;
 const CACHE_TTL_NODE_DETAILS_SECONDS = 300;
-const SHORTEST_PATH_QUERY_TIMEOUT_MS = 8000;
+const MIN_FRONTIER_BATCH_LIMIT = 12;
+const MIN_PER_NODE_LIMIT = 6;
 
 function toNumber(value: unknown): number {
   if (neo4j.isInt(value)) {
@@ -199,10 +200,19 @@ function mapRelationship(relationship: Neo4jRelationship): OptimusEdgeSummary {
 
 @Injectable()
 export class OptimusKgService {
+  private readonly queryTimeoutMs: number;
+  private readonly expansionQueryTimeoutMs: number;
+  private readonly shortestPathQueryTimeoutMs: number;
+
   constructor(
     private readonly neo4jService: Neo4jService,
     private readonly redisService: RedisService,
-  ) {}
+    private readonly configService: ConfigService,
+  ) {
+    this.queryTimeoutMs = this.readTimeout('OPTIMUSKG_QUERY_TIMEOUT_MS', 60000);
+    this.expansionQueryTimeoutMs = this.readTimeout('OPTIMUSKG_EXPANSION_QUERY_TIMEOUT_MS', 120000);
+    this.shortestPathQueryTimeoutMs = this.readTimeout('OPTIMUSKG_SHORTEST_PATH_TIMEOUT_MS', 30000);
+  }
 
   private cacheKey(scope: string, input: Record<string, unknown> = {}) {
     return `optimuskg:${scope}:${JSON.stringify(input)}`;
@@ -227,6 +237,101 @@ export class OptimusKgService {
     } catch {
       // Ignore cache write failures so Redis does not block graph reads.
     }
+  }
+
+  private readTimeout(key: string, fallback: number) {
+    const value = this.configService.get<number | string>(key);
+    const parsed = typeof value === 'number' ? value : Number.parseInt(String(value ?? ''), 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  }
+
+  private isNeo4jTransactionTimeout(error: unknown) {
+    if (!error || typeof error !== 'object') {
+      return false;
+    }
+
+    return 'code' in error && String(error.code) === 'Neo.ClientError.Transaction.TransactionTimedOutClientConfiguration';
+  }
+
+  private async runExpansionStep(params: {
+    session: ReturnType<Neo4jService['getSession']>;
+    frontierBatch: string[];
+    centerNodeId: string;
+    nodeTypes: string[];
+    relationshipTypes: string[];
+    perNodeLimit: number;
+  }) {
+    const attempts: Array<{ frontierBatch: string[]; perNodeLimit: number }> = [];
+    const initialFrontierBatch = [...params.frontierBatch];
+    const initialPerNodeLimit = Math.max(MIN_PER_NODE_LIMIT, Math.trunc(params.perNodeLimit));
+    attempts.push({
+      frontierBatch: initialFrontierBatch,
+      perNodeLimit: initialPerNodeLimit,
+    });
+
+    if (initialFrontierBatch.length > MIN_FRONTIER_BATCH_LIMIT || initialPerNodeLimit > MIN_PER_NODE_LIMIT) {
+      attempts.push({
+        frontierBatch: initialFrontierBatch.slice(0, Math.max(MIN_FRONTIER_BATCH_LIMIT, Math.ceil(initialFrontierBatch.length / 2))),
+        perNodeLimit: Math.max(MIN_PER_NODE_LIMIT, Math.ceil(initialPerNodeLimit / 2)),
+      });
+    }
+
+    attempts.push({
+      frontierBatch: initialFrontierBatch.slice(0, Math.min(MIN_FRONTIER_BATCH_LIMIT, initialFrontierBatch.length)),
+      perNodeLimit: MIN_PER_NODE_LIMIT,
+    });
+
+    let lastError: unknown;
+
+    for (const attempt of attempts) {
+      try {
+        const result = await params.session.run(
+          `
+            UNWIND $frontier AS currentId
+            MATCH (source:Entity {id: currentId})
+            CALL {
+              WITH source
+              MATCH (source)-[rel]-(target:Entity)
+              WHERE (size($relationshipTypes) = 0 OR type(rel) IN $relationshipTypes)
+                AND (
+                  size($nodeTypes) = 0
+                  OR target.typeName IN $nodeTypes
+                  OR target.typeCode IN $nodeTypes
+                  OR target.id = $centerNodeId
+                )
+              RETURN rel, target
+              ORDER BY coalesce(rel.score, 0) DESC, coalesce(target.displayName, target.id)
+              LIMIT $perNodeLimit
+            }
+            RETURN source, rel, target
+          `,
+          {
+            frontier: attempt.frontierBatch,
+            centerNodeId: params.centerNodeId,
+            nodeTypes: params.nodeTypes,
+            relationshipTypes: params.relationshipTypes,
+            perNodeLimit: neo4j.int(attempt.perNodeLimit),
+          },
+          { timeout: this.expansionQueryTimeoutMs },
+        );
+
+        return {
+          result,
+          frontierBatchSize: attempt.frontierBatch.length,
+          perNodeLimit: attempt.perNodeLimit,
+          degraded:
+            attempt.frontierBatch.length < initialFrontierBatch.length ||
+            attempt.perNodeLimit < initialPerNodeLimit,
+        };
+      } catch (error) {
+        lastError = error;
+        if (!this.isNeo4jTransactionTimeout(error)) {
+          throw error;
+        }
+      }
+    }
+
+    throw lastError;
   }
 
   async randomNode(nodeTypes: string[] = []): Promise<OptimusNodeSummary | null> {
@@ -645,35 +750,18 @@ export class OptimusKgService {
           truncated = true;
         }
 
-        const expansionResult = await session.run(
-          `
-            UNWIND $frontier AS currentId
-            MATCH (source:Entity {id: currentId})
-            CALL {
-              WITH source
-              MATCH (source)-[rel]-(target:Entity)
-              WHERE (size($relationshipTypes) = 0 OR type(rel) IN $relationshipTypes)
-                AND (
-                  size($nodeTypes) = 0
-                  OR target.typeName IN $nodeTypes
-                  OR target.typeCode IN $nodeTypes
-                  OR target.id = $centerNodeId
-                )
-              RETURN rel, target
-              ORDER BY coalesce(rel.score, 0) DESC, coalesce(target.displayName, target.id)
-              LIMIT $perNodeLimit
-            }
-            RETURN source, rel, target
-          `,
-          {
-            frontier: frontierBatch,
-            centerNodeId: nodeId,
-            nodeTypes,
-            relationshipTypes,
-            perNodeLimit: neo4j.int(boundedDegreeLimit),
-          },
-          { timeout: QUERY_TIMEOUT_MS },
-        );
+        const expansionStep = await this.runExpansionStep({
+          session,
+          frontierBatch,
+          centerNodeId: nodeId,
+          nodeTypes,
+          relationshipTypes,
+          perNodeLimit: boundedDegreeLimit,
+        });
+        const expansionResult = expansionStep.result;
+        if (expansionStep.degraded) {
+          truncated = true;
+        }
 
         const nextFrontier: string[] = [];
         const nextFrontierSet = new Set<string>();
@@ -718,6 +806,7 @@ export class OptimusKgService {
         {
           nodeIds: [...nodesById.keys()],
         },
+        { timeout: this.queryTimeoutMs },
       );
 
       const degreeByNodeId = new Map<string, number>(
@@ -840,7 +929,7 @@ export class OptimusKgService {
           relationshipTypes,
           nodeTypes,
         },
-        { timeout: SHORTEST_PATH_QUERY_TIMEOUT_MS },
+        { timeout: this.shortestPathQueryTimeoutMs },
       );
 
       const record = result.records[0];
