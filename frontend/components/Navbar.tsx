@@ -30,7 +30,7 @@ export default function Navbar() {
             Version: {version ?? 'unknown'}
           </Link>
         </div>
-        <nav className='hidden space-x-4 md:flex'>
+        {/* <nav className='hidden space-x-4 md:flex'>
           {links.map(link => (
             <Link
               key={link.text}
@@ -40,7 +40,7 @@ export default function Navbar() {
               {link.text}
             </Link>
           ))}
-        </nav>
+        </nav> */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant='ghost' size='icon' className='ml-2 hover:bg-teal-600 md:hidden'>

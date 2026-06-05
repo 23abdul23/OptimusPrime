@@ -1,61 +1,39 @@
 'use client';
 
-import { useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
+import AnimatedNetworkBackground from '@/components/AnimatedNetworkBackground';
 import { ExploreKGChat } from '@/components/chat/ExploreKGChat';
 import { KnowledgeGraphTab } from '@/components/explore';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { databaseStats } from '@/lib/data';
 
 function ExploreContent() {
-  const searchParams = useSearchParams();
-  const tabParam = searchParams.get('tab') ?? undefined;
-  const defaultTab = ['knowledge-graph'].includes(tabParam ?? '') ? tabParam : 'knowledge-graph';
-
   return (
-    <div className='relative mx-auto min-h-[60vh] max-w-7xl'>
-      <Tabs defaultValue={defaultTab}>
-        <TabsList className='grid h-auto w-full grid-cols-1 gap-2 border border-teal-100 bg-white p-2 shadow-xs sm:gap-0 sm:p-0'>
-          {/*
-          <TabsTrigger
-            value='search'
-            className='min-h-[70px] w-full justify-start rounded-md p-3 text-left text-teal-900 data-[state=active]:bg-secondary data-[state=active]:text-white sm:min-h-20 sm:p-4'
-          >
-            <div className='flex w-full flex-col items-start'>
-              <span className='bg-linear-to-r from-emerald-500 via-teal-600 to-cyan-600 bg-clip-text font-semibold text-sm text-transparent leading-tight sm:text-base lg:text-lg'>
-                Search by Multiple Genes
-              </span>
-              <span className='mt-1 text-wrap text-slate-600 text-xs leading-tight md:text-sm'>
-                Paste genes/ENSG IDs and verify before building a network
-              </span>
-            </div>
-          </TabsTrigger>
-          <TabsTrigger
-            value='upload'
-            className='min-h-[70px] w-full justify-start rounded-md p-3 text-left text-teal-900 data-[state=active]:bg-secondary data-[state=active]:text-white sm:min-h-20 sm:p-4'
-          >
-            <div className='flex w-full flex-col items-start'>
-              <span className='bg-linear-to-r from-emerald-500 via-teal-600 to-cyan-600 bg-clip-text font-semibold text-sm text-transparent leading-tight sm:text-base lg:text-lg'>
-                Build your own Network (ByoN)
-              </span>
-              <span className='mt-1 text-wrap text-slate-600 text-xs leading-tight md:text-sm'>
-                Upload CSV/JSON to create a custom interaction network
-              </span>
-            </div>
-          </TabsTrigger>
-          */}
-        </TabsList>
-        {/*
-        <TabsContent value='search' className='mt-4'>
-          <SearchTab />
-        </TabsContent>
-        <TabsContent value='upload' className='mt-4'>
-          <UploadTab />
-        </TabsContent>
-        */}
-        <TabsContent value='knowledge-graph' className='mt-4'>
-          <KnowledgeGraphTab />
-        </TabsContent>
-      </Tabs>
+    <div className='relative mx-auto min-h-[30vh] max-w-7xl'>
+      <div className='mx-auto h-full min-h-[30vh] p-2 sm:p-6'>
+        <div className='relative'>
+          <h1 className='text-center font-bold text-3xl sm:text-4xl'>
+            Welcome to Optimus Prime
+          </h1>
+
+          <p className='mt-3 text-center text-base text-50 sm:text-lg'>
+            Knowledge Graph explorer and visualization tool
+          </p>
+
+          <div className='mx-auto mt-10 grid max-w-5xl grid-cols-1 gap-4 lg:grid-cols-6'>
+            {databaseStats.map((item) => (
+              <div key={item.label} className='text-center'>
+                <div className='font-bold text-2xl sm:text-3xl'>
+                  {item.count}
+                </div>
+                <div className='text-sm opacity-90'>{item.label}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <KnowledgeGraphTab />
+
       <ExploreKGChat />
     </div>
   );
@@ -63,7 +41,11 @@ function ExploreContent() {
 
 export default function Explore() {
   return (
-    <Suspense fallback={<div className='relative mx-auto min-h-[60vh] max-w-7xl' />}>
+    <Suspense
+      fallback={
+        <div className='relative mx-auto min-h-[60vh] max-w-7xl' />
+      }
+    >
       <ExploreContent />
     </Suspense>
   );

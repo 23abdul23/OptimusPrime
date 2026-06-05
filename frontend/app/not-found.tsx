@@ -9,7 +9,13 @@ export default function NotFound() {
     <div className='flex min-h-screen flex-col justify-between'>
       <Navbar />
       <div className='flex flex-col items-center gap-4'>
-        <Image src={'/image/404.png'} alt='404' width={500} height={500} />
+        <Image
+          src={'/image/404.png'}
+          alt='404'
+          width={500}
+          height={500}
+          className='h-auto w-[min(500px,90vw)]'
+        />
         <Link href='/' className={buttonVariants({ variant: 'default', className: '' })}>
           Back to home
         </Link>

@@ -1,6 +1,6 @@
 name: ${COMPOSE_PROJECT_NAME:-optimus-prime}
 services:
-  optimus-neo4j:
+  neo4j:
     image: neo4j:5.26-community
     restart: 'always'
     ports:
@@ -17,10 +17,14 @@ services:
     build:
       context: frontend
       dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_BACKEND_URL: ${OPTIMUS_FRONTEND_BACKEND_URL:-http://localhost:${OPTIMUS_BACKEND_PORT:-4500}}
+        NEXT_PUBLIC_LLM_BACKEND_URL: ${OPTIMUS_FRONTEND_LLM_BACKEND_URL:-http://localhost:${OPTIMUS_BACKEND_PORT:-4500}/llm}
+        NEXT_PUBLIC_SITE_URL: ${OPTIMUS_FRONTEND_SITE_URL:-http://localhost:${OPTIMUS_FRONTEND_PORT:-3500}}
+        NEXT_PUBLIC_GRAPH_AGENT_DEBUG: ${OPTIMUS_FRONTEND_GRAPH_AGENT_DEBUG:-true}
+        AUTH_MAP: ${OPTIMUS_FRONTEND_AUTH_MAP:-user1=password1;user2=password2}
     image: ghcr.io/mizzoudbl/tbep-frontend
     restart: 'always'
-    env_file:
-      - frontend/.env
     ports:
       - "${OPTIMUS_FRONTEND_PORT:-3500}:80"
 
@@ -35,20 +39,32 @@ services:
     ports:
       - "${OPTIMUS_BACKEND_PORT:-4500}:4000"
     depends_on:
-      - optimus-neo4j
-      - redis
+      neo4j:
+        condition: service_started
+      redis:
+        condition: service_healthy
     env_file:
       - backend/.env
     environment:
-      - NEO4J_URI=${OPTIMUS_NEO4J_URI:-bolt://optimus-neo4j:7687}
+      - NEO4J_URI=${OPTIMUS_BACKEND_NEO4J_URI:-bolt://neo4j:7687}
       - NEO4J_USERNAME=${OPTIMUS_NEO4J_USERNAME:-neo4j}
       - NEO4J_PASSWORD=${OPTIMUS_NEO4J_PASSWORD:-optimus-password}
       - NEO4J_DATABASE=${OPTIMUS_NEO4J_DATABASE:-optimusKG}
+      - REDIS_HOST=${OPTIMUS_REDIS_HOST:-redis}
+      - REDIS_PORT=${OPTIMUS_REDIS_PORT:-6379}
   
   redis:
     image: redis:8.2-alpine
     command: redis-server --requirepass ${REDIS_PASSWORD}
     restart: 'always'
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$REDIS_PASSWORD\" ping | grep PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
     volumes:
       - redis-cache:/data
 

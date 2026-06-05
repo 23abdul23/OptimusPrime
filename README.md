@@ -31,6 +31,23 @@ Optimus Explorer is a Knowledge Graph explorer and visualization tool built over
 OPTIMUS_NEO4J_USERNAME=neo4j
 OPTIMUS_NEO4J_PASSWORD=optimus-password
 OPTIMUS_NEO4J_DATABASE=optimusKG
+REDIS_PASSWORD=test1234
+```
+
+The backend container connects to Neo4j over the internal Docker network at `bolt://neo4j:7687`.
+On a server, only change the exposed host ports in `.env` to avoid clashes:
+
+```env
+OPTIMUS_FRONTEND_PORT=3500
+OPTIMUS_BACKEND_PORT=4500
+OPTIMUS_NEO4J_HTTP_PORT=7974
+OPTIMUS_NEO4J_BOLT_PORT=8187
+```
+
+If you need the backend to use an external Neo4j instead of the compose-managed one, set:
+
+```env
+OPTIMUS_BACKEND_NEO4J_URI=bolt://your-host:your-port
 ```
 
 2. Load the dump into the Neo4j Docker volume:
@@ -53,11 +70,11 @@ docker compose up --build
 
 Open:
 
-- Frontend: `http://localhost:3000`
-- GraphQL API: `http://localhost:4000/graphql`
-- Neo4j Browser: `http://localhost:17474`
+- Frontend: `http://localhost:${OPTIMUS_FRONTEND_PORT}`
+- GraphQL API: `http://localhost:${OPTIMUS_BACKEND_PORT}/graphql`
+- Neo4j Browser: `http://localhost:${OPTIMUS_NEO4J_HTTP_PORT}`
 
-Bolt runs on `bolt://localhost:17687` by default.
+Bolt runs on `bolt://localhost:${OPTIMUS_NEO4J_BOLT_PORT}`.
 The Neo4j credentials are `neo4j` / `optimus-password`, and the database name is `optimusKG`.
 
 ### Local Development
@@ -71,7 +88,7 @@ pnpm dev
 For the full local workflow you will usually also want Optimus Neo4j and Redis running through Docker:
 
 ```bash
-docker compose up optimus-neo4j redis
+docker compose up neo4j redis
 ```
 
 ## Core Commands

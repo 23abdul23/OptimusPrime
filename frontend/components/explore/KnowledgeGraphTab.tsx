@@ -3,7 +3,6 @@
 import { ArrowRightIcon, DatabaseIcon } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 /**
  * KnowledgeGraphTab - Entry point for the live knowledge graph explorer.
@@ -24,8 +23,8 @@ export function KnowledgeGraphTab() {
               Open the live knowledge graph workspace directly and explore the loaded OptimusKG data.
             </p>
           </div>
-          <Button type='button' onClick={() => router.push('/knowledge-graph')} className='bg-sky-700 hover:bg-sky-800'>
-            Open Explorer
+          <Button type='button' onClick={() =>window.open('/knowledge-graph', '_blank', 'noopener,noreferrer')} className='bg-sky-700 hover:bg-sky-800'>
+            Open KG
             <ArrowRightIcon className='size-4' />
           </Button>
         </div>
