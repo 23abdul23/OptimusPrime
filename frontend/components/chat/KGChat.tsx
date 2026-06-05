@@ -11,6 +11,7 @@ import {
   clearGraphAgentHandoffSnapshot,
   loadGraphAgentHandoffSnapshot,
   saveGraphAgentHandoffSnapshot,
+  type GraphAgentHandoffSnapshot,
 } from '@/lib/graph-agent-handoff';
 import type {
   GraphAction,
@@ -453,28 +454,82 @@ function buildFollowUpSuggestions(params: {
   }
 
   const { bundle } = { bundle: evidencePart.data };
+  const contextLabels = [
+    ...params.liveContext.selectedNodeContext.map((node) => node.label),
+    ...(params.liveContext.networkContext?.visibleNodeContext ?? []).slice(0, 12).map((node) => node.label),
+    ...bundle.resolvedEntities.map((entity) => entity.displayName),
+  ].filter((label, index, all) => label.trim().length > 0 && all.findIndex((candidate) => candidate === label) === index);
+  const primaryLabels = contextLabels.slice(0, 3);
+  const joinedPrimaryLabels = primaryLabels.join(', ');
+  const primaryEntityType =
+    bundle.resolvedEntities[0]?.typeName ??
+    params.liveContext.selectedNodeContext[0]?.nodeType ??
+    params.liveContext.networkContext?.topNodeTypes?.[0]?.type ??
+    'entity';
   const resolvedTypes = new Set(bundle.resolvedEntities.map((entity) => entity.typeName.toLowerCase()));
   const planOps = new Set(bundle.plan.map((step) => step.operation));
   const suggestions: string[] = [];
 
+  if (primaryLabels.length > 0) {
+    suggestions.push(
+      primaryLabels.length > 1
+        ? `How are ${joinedPrimaryLabels} connected within the current network?`
+        : `What is the local network neighborhood around ${primaryLabels[0]}?`,
+    );
+  }
   if (params.liveContext.selectedNodeContext.length > 1) {
-    suggestions.push('What pathways involve these selected nodes?');
-    suggestions.push('What do these selected nodes have in common?');
+    suggestions.push(
+      `What pathways connect ${joinedPrimaryLabels || 'these selected nodes'}?`,
+    );
   }
-  if ([...resolvedTypes].some((type) => /gene|protein/.test(type))) {
-    suggestions.push('Which approved drugs target these proteins?');
-    suggestions.push('What diseases are associated with these genes?');
+  if ([...resolvedTypes].some((type) => /gene|protein/.test(type)) || /gene|protein/i.test(primaryEntityType)) {
+    suggestions.push(
+      primaryLabels.length > 0
+        ? `Which diseases are linked to ${joinedPrimaryLabels}?`
+        : 'What diseases are associated with these genes?',
+    );
+    suggestions.push(
+      primaryLabels.length > 0
+        ? `Which approved drugs target pathways connected to ${joinedPrimaryLabels}?`
+        : 'Which approved drugs target these proteins?',
+    );
   }
-  if ([...resolvedTypes].some((type) => /disease|phenotype|syndrome|disorder/.test(type))) {
-    suggestions.push('Which genes are most central to this disease module?');
-    suggestions.push('What pathways connect these disease-linked entities?');
+  if ([...resolvedTypes].some((type) => /disease|phenotype|syndrome|disorder/.test(type)) || /disease|phenotype|syndrome|disorder/i.test(primaryEntityType)) {
+    suggestions.push(
+      primaryLabels.length > 0
+        ? `Which genes are most central around ${joinedPrimaryLabels}?`
+        : 'Which genes are most central to this disease module?',
+    );
+    suggestions.push(
+      primaryLabels.length > 0
+        ? `What pathways connect the entities surrounding ${joinedPrimaryLabels}?`
+        : 'What pathways connect these disease-linked entities?',
+    );
   }
   if (planOps.has('summarize-selected-nodes') || planOps.has('summarize-visible-subgraph')) {
     suggestions.push('Which nodes are the main hubs in this graph?');
-    suggestions.push('What biological relationships dominate this network?');
+    suggestions.push(
+      primaryLabels.length > 0
+        ? `Which adjacent nodes around ${joinedPrimaryLabels} would be most informative to expand next?`
+        : 'Which adjacent regions of this network are most informative to expand next?',
+    );
   }
   if (planOps.has('compare-nodes') || planOps.has('find-shared-pathways')) {
-    suggestions.push('Which diseases share these biomarkers?');
+    suggestions.push(
+      primaryLabels.length > 0
+        ? `Which shared pathways or diseases best explain the overlap between ${joinedPrimaryLabels}?`
+        : 'Which diseases share these biomarkers?',
+    );
+  }
+  if (planOps.has('build-gene-network') || planOps.has('build-multi-entity-network') || planOps.has('expand-subgraph')) {
+    suggestions.push(
+      primaryLabels.length > 0
+        ? `Which nearby pathways, drugs, or phenotypes should I add next around ${joinedPrimaryLabels}?`
+        : 'Which nearby pathways, drugs, or phenotypes should I add next in this graph?',
+    );
+  }
+  if (bundle.query.trim().length > 0) {
+    suggestions.push(`What is the strongest biological interpretation of the network built for "${bundle.query}"?`);
   }
 
   return suggestions.filter((suggestion, index, all) => {
@@ -737,15 +792,32 @@ function buildGraphAgentContext(
         return visibleNodeIdSet.has(source) && visibleNodeIdSet.has(target);
       })
     : [];
-  const selectedNodeContext: GraphSelectionNodeContext[] = selectedNodes.map((nodeId) => {
-    const label = graph?.getNodeAttribute(nodeId, 'label') || nodeId;
+  const validSelectedEdgeIds = (graph ? selectedEdges : []).filter((edgeId) => graph?.hasEdge(edgeId));
+  const selectedNodeIdSet = new Set((graph ? selectedNodes.filter((nodeId) => graph.hasNode(nodeId)) : []) as string[]);
+  validSelectedEdgeIds.forEach((edgeId) => {
+    const source = graph?.source(edgeId);
+    const target = graph?.target(edgeId);
+    if (source && graph?.hasNode(source)) {
+      selectedNodeIdSet.add(source);
+    }
+    if (target && graph?.hasNode(target)) {
+      selectedNodeIdSet.add(target);
+    }
+  });
+  const validSelectedNodeIds = [...selectedNodeIdSet];
+
+  const selectedNodeContext: GraphSelectionNodeContext[] = validSelectedNodeIds.map((nodeId) => {
+    const label = graph?.hasNode(nodeId) ? String(graph.getNodeAttribute(nodeId, 'label') ?? nodeId) : nodeId;
     const nodeType =
-      String(graph?.getNodeAttribute(nodeId, 'nodeType') ?? graph?.getNodeAttribute(nodeId, 'typeCode') ?? '') ||
+      String(
+        graph?.hasNode(nodeId)
+          ? graph.getNodeAttribute(nodeId, 'nodeType') ?? graph.getNodeAttribute(nodeId, 'typeCode') ?? ''
+          : '',
+      ) ||
       undefined;
     return { id: nodeId, label, nodeType };
   });
-  const selectedEdgeContext: GraphSelectionEdgeContext[] = (graph ? selectedEdges : [])
-    .filter((edgeId) => graph?.hasEdge(edgeId))
+  const selectedEdgeContext: GraphSelectionEdgeContext[] = validSelectedEdgeIds
     .slice(0, 128)
     .map((edgeId) => ({
       id: edgeId,
@@ -763,8 +835,8 @@ function buildGraphAgentContext(
     ? {
         totalNodes: visibleNodeIds.length,
         totalEdges: visibleEdgeIds.length,
-        selectedNodeIds: selectedNodes,
-        selectedEdgeIds: selectedEdges,
+        selectedNodeIds: validSelectedNodeIds,
+        selectedEdgeIds: validSelectedEdgeIds,
         visibleNodeIds,
         visibleEdgeIds,
         visibleNodeContext: visibleNodeIds.map((nodeId) => ({
@@ -810,6 +882,7 @@ export function KGChat({ onChatOpen, children }: KGChatProps) {
   const processedActionIds = React.useRef<Set<string>>(new Set());
   const handoffTriggered = React.useRef(false);
   const restoredHandoffSnapshot = React.useRef(false);
+  const pendingHandoffSnapshot = React.useRef<GraphAgentHandoffSnapshot | null>(null);
   const sigmaInstance = useKGStore((state) => state.sigmaInstance);
   const setGraphSelection = useKGStore((state) => state.setGraphSelection);
   const selectedNodes = useKGStore((state) => state.selectedNodes);
@@ -853,14 +926,35 @@ export function KGChat({ onChatOpen, children }: KGChatProps) {
       return;
     }
 
+    pendingHandoffSnapshot.current = snapshot;
+    processedActionIds.current.clear();
     setSessionId(snapshot.sessionId);
     if (LLM_MODELS.some((candidate) => candidate.id === snapshot.model)) {
       setModel(snapshot.model as (typeof LLM_MODELS)[number]['id']);
     }
     setMessages(snapshot.messages);
     onChatOpen?.(true);
-    clearGraphAgentHandoffSnapshot();
   }, [onChatOpen, pathname, setMessages]);
+
+  React.useEffect(() => {
+    if (pathname !== '/knowledge-graph') {
+      return;
+    }
+
+    const snapshot = pendingHandoffSnapshot.current;
+    if (!snapshot) {
+      return;
+    }
+
+    const hasHydratedMessages = messages.length >= snapshot.messages.length && snapshot.messages.length > 0;
+    if (!hasHydratedMessages) {
+      setMessages(snapshot.messages);
+      return;
+    }
+
+    pendingHandoffSnapshot.current = null;
+    clearGraphAgentHandoffSnapshot();
+  }, [messages, pathname, setMessages]);
   const latestEvidence = React.useMemo(() => {
     for (const message of [...messages].reverse()) {
       for (const part of [...message.parts].reverse()) {

@@ -101,6 +101,7 @@ export function KGGraphEvents({
   const [clickedEdge, setClickedEdge] = useState<string | null>(null);
   const clickedEdgeRef = useRef<string | null>(null);
   const dragHappenedRef = useRef(false);
+  const deferredSelectionFrameRef = useRef<number | null>(null);
   const nodeSearchQuery = useKGStore(state => state.nodeSearchQuery);
   const activePropertyNodeTypes = useKGStore(state => state.activePropertyNodeTypes);
   const highlightNeighborNodes = useKGStore(state => state.highlightNeighborNodes);
@@ -141,7 +142,13 @@ export function KGGraphEvents({
       highlightEdge(graph, edgeId);
     }
 
-    setGraphSelection(normalized);
+    if (deferredSelectionFrameRef.current !== null) {
+      window.cancelAnimationFrame(deferredSelectionFrameRef.current);
+    }
+    deferredSelectionFrameRef.current = window.requestAnimationFrame(() => {
+      deferredSelectionFrameRef.current = null;
+      setGraphSelection(normalized);
+    });
     return normalized;
   };
 
@@ -205,6 +212,15 @@ export function KGGraphEvents({
       useKGStore.setState({ nodeNameToIdTrie: Trie.fromArray(nodeArr, 'key') });
     });
   }, [sigma]);
+
+  useEffect(() => {
+    return () => {
+      if (deferredSelectionFrameRef.current !== null) {
+        window.cancelAnimationFrame(deferredSelectionFrameRef.current);
+        deferredSelectionFrameRef.current = null;
+      }
+    };
+  }, []);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: not needed
   useEffect(() => {

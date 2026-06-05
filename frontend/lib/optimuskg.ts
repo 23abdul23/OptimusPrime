@@ -212,12 +212,17 @@ export function focusOptimusNodes(
 
 export function resetOptimusViewport(sigma: Sigma<NodeAttributes, EdgeAttributes>) {
   const graph = sigma.getGraph();
-  const visibleNodes = graph.filterNodes((_node, attr) => !attr.hidden);
+  const visibleNodes = graph.filterNodes((nodeId, attr) => !attr.hidden && graph.hasNode(nodeId));
   if (visibleNodes.length === 0) {
     return;
   }
 
-  fitViewportToNodes(sigma, visibleNodes, { animate: true });
+  try {
+    fitViewportToNodes(sigma, visibleNodes, { animate: true });
+    return;
+  } catch {
+    focusCameraOnNodes(sigma, graph, visibleNodes);
+  }
 }
 
 export function previewOptimusNode(

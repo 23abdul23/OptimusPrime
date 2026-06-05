@@ -15,8 +15,11 @@ import type {
   ExtractedQuery,
   GraphEvidenceItem,
   GraphNetworkContext,
+  PendingClarificationState,
   GraphSelectionEdgeContext,
   GraphSelectionNodeContext,
+  QueryIntentClassification,
+  QueryRoute,
   ResolvedEntity,
 } from './graph-agent.types';
 import { extractLatestUserText } from './graph-agent.utils';
@@ -61,14 +64,96 @@ export class GraphAgentService {
         const responseId = `${sessionId}-${Date.now()}`;
 
         const previousState = await this.conversationStateService.getConversationGraphState(sessionId);
-        const queryRoute = this.queryRouterService.route({
+        const clarificationResolution = this.resolvePendingClarification(
+          previousState.pendingClarification,
           query,
+        );
+
+        if (previousState.pendingClarification && !clarificationResolution) {
+          const pendingClarification = previousState.pendingClarification;
+          const evidenceBundle = this.evidenceAgentService.buildBundle({
+            query: pendingClarification.originalQuery,
+            items: [
+              {
+                id: `pending-clarification-${Date.now()}`,
+                kind: 'query',
+                title: `Clarification still required: ${pendingClarification.unresolvedEntity}`,
+                summary: `I still need you to choose how to resolve "${pendingClarification.unresolvedEntity}" before I can continue the original request. Available candidates: ${pendingClarification.candidateEntities.map((candidate) => `${candidate.displayName} (${candidate.typeName})`).join(', ')}.`,
+                score: 0.6,
+                nodeIds: pendingClarification.candidateEntities.map((candidate) => candidate.id),
+                edgeIds: [],
+                metadata: {
+                  unresolvedEntity: pendingClarification.unresolvedEntity,
+                  candidates: pendingClarification.candidateEntities.map((candidate) => ({
+                    id: candidate.id,
+                    displayName: candidate.displayName,
+                    typeName: candidate.typeName,
+                  })),
+                },
+              },
+            ],
+            resolvedEntities: pendingClarification.resolvedEntities,
+            plan: [
+              {
+                id: `resume-pending-clarification-${Date.now()}`,
+                intent: pendingClarification.pendingIntent,
+                operation: 'resolve-explicit-mentions',
+                executor: 'resolution-agent',
+                tool: 'resolveEntity',
+                description:
+                  'Wait for a clarification response before resuming the previously requested graph operation.',
+                params: {
+                  unresolvedEntity: pendingClarification.unresolvedEntity,
+                  candidates: pendingClarification.candidateEntities.map((candidate) => ({
+                    id: candidate.id,
+                    displayName: candidate.displayName,
+                    typeName: candidate.typeName,
+                  })),
+                },
+              },
+            ],
+            warnings: [
+              `A pending clarification for "${pendingClarification.unresolvedEntity}" must be resolved before the original request can continue.`,
+            ],
+            selectedNodeIds: promptDto.networkContext?.selectedNodeIds ?? previousState.selectedNodeIds,
+            visibleNodeIds: promptDto.networkContext?.visibleNodeIds ?? previousState.visibleNodeIds,
+            replanAttempts: 0,
+          });
+
+          writer.write({
+            type: 'data-graphEvidence',
+            id: `graph-evidence-${responseId}`,
+            data: evidenceBundle,
+          });
+          writer.write({
+            type: 'data-graphActions',
+            id: `graph-actions-${responseId}`,
+            data: [],
+          });
+          writer.write({
+            type: 'data-graphState',
+            id: `graph-state-${responseId}`,
+            data: {
+              sessionId,
+              state: previousState,
+            },
+          });
+          this.writeText(
+            writer,
+            `I still need you to clarify "${pendingClarification.unresolvedEntity}" before I continue "${pendingClarification.originalQuery}". You can reply with "all of them", "the first one", or a candidate name such as "${pendingClarification.candidateEntities[0]?.displayName ?? pendingClarification.unresolvedEntity}".`,
+          );
+          return;
+        }
+
+        const effectiveQuery = clarificationResolution?.originalQuery ?? query;
+        const queryRoute = clarificationResolution?.queryRoute ?? this.queryRouterService.route({
+          query: effectiveQuery,
           selectedNodeContext: promptDto.selectedNodeContext ?? [],
           selectedEdgeContext: promptDto.selectedEdgeContext ?? [],
           networkContext: promptDto.networkContext,
         });
         const graphContext = this.graphContextAgentService.build({
-          query,
+          query: effectiveQuery,
           queryRoute,
           selectedNodeContext: promptDto.selectedNodeContext ?? [],
           selectedEdgeContext: promptDto.selectedEdgeContext ?? [],
@@ -77,11 +162,13 @@ export class GraphAgentService {
         });
         const isDiscoveryMode =
           queryRoute.category === 'GRAPH_DISCOVERY_QUERY' || graphContext.graphScope.mode === 'discovery';
-        const extractedQuery = queryRoute.requiresEntityExtraction
-          ? this.entityExtractionService.extractQuery({ query })
-          : this.createEmptyExtractedQuery(query);
-        const intent = this.intentAgentService.classify({
-          query,
+        const extractedQuery = clarificationResolution?.extractedQuery
+          ? clarificationResolution.extractedQuery
+          : queryRoute.requiresEntityExtraction
+            ? this.entityExtractionService.extractQuery({ query: effectiveQuery })
+            : this.createEmptyExtractedQuery(effectiveQuery);
+        const intent = clarificationResolution?.intent ?? this.intentAgentService.classify({
+          query: effectiveQuery,
           queryRoute,
           graphContext,
         });
@@ -96,7 +183,7 @@ export class GraphAgentService {
 
         if (intent.operation === 'network-summary' && promptDto.networkContext) {
           const evidenceBundle = this.evidenceAgentService.buildBundle({
-            query,
+            query: effectiveQuery,
             items: [
               {
                 id: `network-summary-item-${Date.now()}`,
@@ -140,6 +227,7 @@ export class GraphAgentService {
             selectedEdgeIds: promptDto.networkContext.selectedEdgeIds ?? previousState.selectedEdgeIds,
             visibleNodeIds: promptDto.networkContext.visibleNodeIds ?? previousState.visibleNodeIds,
             visibleEdgeIds: promptDto.networkContext.visibleEdgeIds ?? previousState.visibleEdgeIds,
+            pendingClarification: undefined,
             updatedAt: new Date().toISOString(),
           });
 
@@ -173,9 +261,13 @@ export class GraphAgentService {
           graphContext.selectedNodes.length > 0 ? graphContext.selectedNodes : graphContext.visibleNodes,
         );
 
-        if (queryRoute.requiresEntityResolution && localResolution.ambiguous.length > 0) {
+        if (
+          !clarificationResolution &&
+          queryRoute.requiresEntityResolution &&
+          localResolution.ambiguous.length > 0
+        ) {
           const evidenceBundle = this.evidenceAgentService.buildBundle({
-            query,
+            query: effectiveQuery,
             items: [
               ...selectedEdgeEvidence,
               ...localResolution.ambiguous.map((ambiguity, index) => ({
@@ -228,6 +320,28 @@ export class GraphAgentService {
               selectedNodeIds: (promptDto.selectedNodeContext ?? []).map((node) => node.id),
               selectedEdgeIds: (promptDto.selectedEdgeContext ?? []).map((edge) => edge.id),
               networkContext: promptDto.networkContext,
+              pendingClarification: this.createPendingClarificationState({
+                kind: 'visible-graph-ambiguity',
+                originalQuery: effectiveQuery,
+                intent,
+                queryRoute,
+                extractedQuery,
+                resolvedEntities: [...selectedEntities],
+                ambiguity: {
+                  mention: localResolution.ambiguous[0]?.mention ?? '',
+                  candidates: localResolution.ambiguous[0]?.candidates.map((candidate) => ({
+                    id: candidate.id,
+                    query: localResolution.ambiguous[0]?.mention ?? candidate.label,
+                    displayName: candidate.label,
+                    typeCode: candidate.nodeType ?? 'Entity',
+                    typeName: candidate.nodeType ?? 'Entity',
+                    confidence: 0.95,
+                    matchedOn: ['visible-graph-ambiguity'],
+                    resolutionStage: 'exact',
+                    source: 'selected',
+                  })),
+                },
+              }),
             }),
           );
 
@@ -264,33 +378,37 @@ export class GraphAgentService {
         const unresolvedLocalMentions = extractedQuery.mentions.filter(
           (mention) => !localResolution.resolvedMentionTexts.has(mention.text.trim().toLowerCase()),
         );
-        const resolvedQueryEntities = queryRoute.requiresEntityResolution
-          ? [
-              ...localResolution.resolvedEntities,
-              ...(await this.entityResolutionAgentService.resolveEntities(
-                unresolvedLocalMentions,
-                localResolution.resolvedEntities.length > 0 ? [] : extractedQuery.concepts,
-              )),
-            ]
-          : [];
+        const resolvedQueryEntities = clarificationResolution?.resolvedEntities
+          ? clarificationResolution.resolvedEntities
+          : queryRoute.requiresEntityResolution
+            ? [
+                ...localResolution.resolvedEntities,
+                ...(await this.entityResolutionAgentService.resolveEntities(
+                  unresolvedLocalMentions,
+                  localResolution.resolvedEntities.length > 0 ? [] : extractedQuery.concepts,
+                )),
+              ]
+            : [];
         const resolvedEntities = this.combineResolvedEntities({
           resolvedQueryEntities,
           selectedEntities,
           queryRoute,
         });
-        const unresolvedMentions = queryRoute.requiresEntityResolution
-          ? this.getUnresolvedMentionTexts(extractedQuery.mentions, resolvedQueryEntities)
-          : [];
+        const unresolvedMentions = clarificationResolution
+          ? []
+          : queryRoute.requiresEntityResolution
+            ? this.getUnresolvedMentionTexts(extractedQuery.mentions, resolvedQueryEntities)
+            : [];
 
         if (isDiscoveryMode) {
           const discoveryAssessment = this.assessDiscoveryQueryBroadness({
-            query,
+            query: effectiveQuery,
             extractedQuery,
             resolvedEntities,
           });
           if (discoveryAssessment.shouldClarify) {
             const evidenceBundle = this.evidenceAgentService.buildBundle({
-              query,
+              query: effectiveQuery,
               items: [
                 {
                   id: `discovery-broad-${Date.now()}`,
@@ -369,7 +487,7 @@ export class GraphAgentService {
           const discoveryAmbiguities = await this.findDiscoveryAmbiguities(extractedQuery, unresolvedMentions);
           if (discoveryAmbiguities.length > 0) {
             const evidenceBundle = this.evidenceAgentService.buildBundle({
-              query,
+              query: effectiveQuery,
               items: discoveryAmbiguities.map((ambiguity, index) => ({
                 id: `discovery-ambiguity-${index}`,
                 kind: 'query' as const,
@@ -428,6 +546,28 @@ export class GraphAgentService {
                 selectedNodeIds: [],
                 selectedEdgeIds: [],
                 networkContext: promptDto.networkContext,
+                pendingClarification: this.createPendingClarificationState({
+                  kind: 'discovery-ambiguity',
+                  originalQuery: effectiveQuery,
+                  intent,
+                  queryRoute,
+                  extractedQuery,
+                  resolvedEntities,
+                  ambiguity: {
+                    mention: discoveryAmbiguities[0]?.mention ?? '',
+                    candidates: (discoveryAmbiguities[0]?.candidates ?? []).map((candidate) => ({
+                      id: candidate.id,
+                      query: discoveryAmbiguities[0]?.mention ?? candidate.displayName,
+                      displayName: candidate.displayName,
+                      typeCode: candidate.typeName,
+                      typeName: candidate.typeName,
+                      confidence: candidate.score,
+                      matchedOn: candidate.matchedOn,
+                      resolutionStage: 'semantic',
+                      source: 'query',
+                    })),
+                  },
+                }),
               }),
             );
 
@@ -467,7 +607,7 @@ export class GraphAgentService {
           this.shouldBlockOnUnresolvedMentions(extractedQuery.mentions.length, intent.operation, unresolvedMentions)
         ) {
           const evidenceBundle = this.evidenceAgentService.buildBundle({
-            query,
+            query: effectiveQuery,
             items: selectedEdgeEvidence,
             resolvedEntities,
             plan: [
@@ -531,7 +671,7 @@ export class GraphAgentService {
         }
 
         let accumulatedPlan = this.retrievalPlanningAgentService.plan({
-          query,
+          query: effectiveQuery,
           queryRoute,
           graphContext,
           intent,
@@ -553,7 +693,7 @@ export class GraphAgentService {
           accumulatedGraphActions.push(...retrieval.graphActions);
 
           evidenceBundle = this.evidenceAgentService.buildBundle({
-            query,
+            query: effectiveQuery,
             items: accumulatedEvidence,
             resolvedEntities,
             plan: accumulatedPlan,
@@ -568,7 +708,7 @@ export class GraphAgentService {
           }
 
           const replan = this.replanningAgentService.replan({
-            query,
+            query: effectiveQuery,
             intent,
             graphContext,
             extractedQuery,
@@ -594,7 +734,7 @@ export class GraphAgentService {
           promptDto.networkContext.totalNodes > 0
         ) {
           evidenceBundle = this.evidenceAgentService.buildBundle({
-            query,
+            query: effectiveQuery,
             items: [
               {
                 id: `visible-network-fallback-${Date.now()}`,
@@ -635,6 +775,7 @@ export class GraphAgentService {
             selectedNodeIds: (promptDto.selectedNodeContext ?? []).map((node) => node.id),
             selectedEdgeIds: (promptDto.selectedEdgeContext ?? []).map((edge) => edge.id),
             networkContext: promptDto.networkContext,
+            pendingClarification: undefined,
           }),
         );
 
@@ -659,7 +800,7 @@ export class GraphAgentService {
 
         const synthesisStream = this.reasoningAgentService.streamAnswer({
           model: (promptDto.model as ModelId | undefined) ?? DEFAULT_MODEL,
-          query,
+          query: effectiveQuery,
           evidence: evidenceBundle,
           resolvedEntities,
           graphContext,
@@ -667,13 +808,16 @@ export class GraphAgentService {
         });
 
         if (!synthesisStream) {
-          this.writeText(writer, this.reasoningAgentService.createFallbackAnswer(query, evidenceBundle));
+          this.writeText(
+            writer,
+            this.reasoningAgentService.createFallbackAnswer(effectiveQuery, evidenceBundle),
+          );
           return;
         }
 
         writer.merge(
           synthesisStream.toUIMessageStream<GraphAgentUIMessage>({
-            onError: () => this.reasoningAgentService.createFallbackAnswer(query, evidenceBundle),
+            onError: () => this.reasoningAgentService.createFallbackAnswer(effectiveQuery, evidenceBundle),
           }),
         );
       },
@@ -681,6 +825,175 @@ export class GraphAgentService {
         return error instanceof Error ? error.message : 'Graph-agent request failed';
       },
     });
+  }
+
+  private resolvePendingClarification(
+    pendingClarification: PendingClarificationState | undefined,
+    query: string,
+  ):
+    | {
+        originalQuery: string;
+        queryRoute: QueryRoute;
+        extractedQuery: ExtractedQuery;
+        intent: QueryIntentClassification;
+        resolvedEntities: ResolvedEntity[];
+      }
+    | undefined {
+    if (!pendingClarification) {
+      return undefined;
+    }
+
+    const selectedCandidates = this.selectClarificationCandidates(pendingClarification, query);
+    if (selectedCandidates.length === 0) {
+      return undefined;
+    }
+
+    return {
+      originalQuery: pendingClarification.originalQuery,
+      queryRoute: {
+        category: pendingClarification.pendingCategory,
+        intent: pendingClarification.pendingOperation,
+        requiresEntityExtraction: false,
+        requiresEntityResolution: false,
+        requiresGraphContext: pendingClarification.kind === 'visible-graph-ambiguity',
+        preferredExecutor:
+          pendingClarification.pendingCategory === 'CYPHER_QUERY' ? 'cypher' : 'mixed',
+        reasons: ['resumed-pending-clarification'],
+        signals: {
+          hasGraphReference: pendingClarification.kind === 'visible-graph-ambiguity',
+          hasExplicitEntitySignal: true,
+          hasCypherSignal: pendingClarification.pendingCategory === 'CYPHER_QUERY',
+          hasSelectionContext: pendingClarification.kind === 'visible-graph-ambiguity',
+          hasDiscoveryTrigger: pendingClarification.pendingCategory === 'GRAPH_DISCOVERY_QUERY',
+        },
+      },
+      extractedQuery: pendingClarification.extractedQuery,
+      intent: {
+        primary: pendingClarification.pendingIntent,
+        operation: pendingClarification.pendingOperation,
+        requestedEntityTypes: [],
+        allowContextFallback: true,
+      },
+      resolvedEntities: this.mergeResolvedEntityLists(
+        pendingClarification.resolvedEntities,
+        selectedCandidates,
+      ),
+    };
+  }
+
+  private selectClarificationCandidates(
+    pendingClarification: PendingClarificationState,
+    query: string,
+  ) {
+    const normalizedQuery = query.trim().toLowerCase();
+    if (normalizedQuery.length === 0) {
+      return [];
+    }
+
+    if (
+      /^(all|all of them|use all|show everything|everything|all candidates|include all|all of those)$/i.test(
+        normalizedQuery,
+      )
+    ) {
+      return pendingClarification.candidateEntities;
+    }
+
+    const ordinalMatch =
+      normalizedQuery.match(/\b(first|1st|one|1)\b/) ??
+      normalizedQuery.match(/\b(second|2nd|two|2)\b/) ??
+      normalizedQuery.match(/\b(third|3rd|three|3)\b/) ??
+      normalizedQuery.match(/\b(fourth|4th|four|4)\b/);
+    if (ordinalMatch) {
+      const ordinalMap: Record<string, number> = {
+        first: 0,
+        '1st': 0,
+        one: 0,
+        '1': 0,
+        second: 1,
+        '2nd': 1,
+        two: 1,
+        '2': 1,
+        third: 2,
+        '3rd': 2,
+        three: 2,
+        '3': 2,
+        fourth: 3,
+        '4th': 3,
+        four: 3,
+        '4': 3,
+      };
+      const candidateIndex = ordinalMap[ordinalMatch[1].toLowerCase()];
+      const candidate = pendingClarification.candidateEntities[candidateIndex];
+      return candidate ? [candidate] : [];
+    }
+
+    return pendingClarification.candidateEntities.filter((candidate) =>
+      this.matchesClarificationCandidate(candidate, normalizedQuery),
+    );
+  }
+
+  private matchesClarificationCandidate(candidate: ResolvedEntity, normalizedQuery: string) {
+    const candidateTerms = new Set<string>();
+    candidateTerms.add(candidate.displayName.trim().toLowerCase());
+    candidateTerms.add(candidate.query.trim().toLowerCase());
+    candidate.matchedOn.forEach((term) => candidateTerms.add(term.trim().toLowerCase()));
+
+    for (const term of candidateTerms) {
+      if (!term) {
+        continue;
+      }
+
+      if (term === normalizedQuery || term.includes(normalizedQuery) || normalizedQuery.includes(term)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private mergeResolvedEntityLists(primary: ResolvedEntity[], secondary: ResolvedEntity[]) {
+    const merged = new Map<string, ResolvedEntity>();
+    for (const entity of [...primary, ...secondary]) {
+      const existing = merged.get(entity.id);
+      if (!existing || entity.confidence > existing.confidence) {
+        merged.set(entity.id, entity);
+      }
+    }
+
+    return [...merged.values()];
+  }
+
+  private createPendingClarificationState(params: {
+    kind: PendingClarificationState['kind'];
+    originalQuery: string;
+    intent: QueryIntentClassification;
+    queryRoute: QueryRoute;
+    extractedQuery: ExtractedQuery;
+    resolvedEntities: ResolvedEntity[];
+    ambiguity: {
+      mention: string;
+      candidates: ResolvedEntity[] | undefined;
+    };
+  }): PendingClarificationState | undefined {
+    const candidateEntities = (params.ambiguity.candidates ?? []).filter(
+      (candidate) => candidate.id.trim().length > 0,
+    );
+    if (!params.ambiguity.mention.trim() || candidateEntities.length === 0) {
+      return undefined;
+    }
+
+    return {
+      kind: params.kind,
+      originalQuery: params.originalQuery,
+      pendingIntent: params.intent.primary,
+      pendingOperation: params.intent.operation,
+      pendingCategory: params.queryRoute.category,
+      extractedQuery: params.extractedQuery,
+      resolvedEntities: params.resolvedEntities,
+      unresolvedEntity: params.ambiguity.mention,
+      candidateEntities,
+      createdAt: new Date().toISOString(),
+    };
   }
 
   private buildNextState(params: {
@@ -691,6 +1004,7 @@ export class GraphAgentService {
     selectedNodeIds: string[];
     selectedEdgeIds: string[];
     networkContext?: GraphNetworkContext;
+    pendingClarification?: PendingClarificationState;
   }): ConversationGraphState {
     return {
       ...params.previousState,
@@ -715,6 +1029,7 @@ export class GraphAgentService {
       selectedEdgeIds: params.selectedEdgeIds,
       visibleNodeIds: params.networkContext?.visibleNodeIds ?? params.previousState.visibleNodeIds,
       visibleEdgeIds: params.networkContext?.visibleEdgeIds ?? params.previousState.visibleEdgeIds,
+      pendingClarification: params.pendingClarification,
       updatedAt: new Date().toISOString(),
     };
   }

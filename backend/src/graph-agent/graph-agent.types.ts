@@ -459,6 +459,19 @@ export interface GraphEvidenceBundle {
   assessment: GraphEvidenceAssessment;
 }
 
+export interface PendingClarificationState {
+  kind: 'discovery-ambiguity' | 'visible-graph-ambiguity';
+  originalQuery: string;
+  pendingIntent: GraphIntent;
+  pendingOperation: QueryIntentClassification['operation'];
+  pendingCategory: QueryCategory;
+  extractedQuery: ExtractedQuery;
+  resolvedEntities: ResolvedEntity[];
+  unresolvedEntity: string;
+  candidateEntities: ResolvedEntity[];
+  createdAt: string;
+}
+
 export interface ConversationGraphState {
   sessionId: string;
   activeEntities: ResolvedEntity[];
@@ -472,6 +485,7 @@ export interface ConversationGraphState {
   selectedEdgeIds: string[];
   visibleNodeIds: string[];
   visibleEdgeIds: string[];
+  pendingClarification?: PendingClarificationState;
   updatedAt: string;
 }
 

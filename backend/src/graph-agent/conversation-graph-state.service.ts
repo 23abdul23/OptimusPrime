@@ -29,6 +29,7 @@ export class ConversationGraphStateService {
       selectedEdgeIds: [],
       visibleNodeIds: [],
       visibleEdgeIds: [],
+      pendingClarification: undefined,
       updatedAt: new Date().toISOString(),
     };
   }
