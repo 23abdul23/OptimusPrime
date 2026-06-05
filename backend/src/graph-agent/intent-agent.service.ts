@@ -39,6 +39,125 @@ export class IntentAgentService {
       };
     }
 
+    if (
+      /\b(ontology|hierarchy|ancestor|ancestors|descendant|descendants|parent|parents|child|children|root|roots)\b/.test(
+        normalized,
+      )
+    ) {
+      return {
+        primary: 'ontology-analysis',
+        operation: 'ontology-analysis',
+        requestedEntityTypes,
+        allowContextFallback: true,
+      };
+    }
+
+    if (
+      /\benrich(?:ed|ment)?\b/.test(normalized) ||
+      /\bover-?represent(?:ed|ation)?\b/.test(normalized) ||
+      /\boverrepresented\b/.test(normalized)
+    ) {
+      return {
+        primary: 'enrichment-analysis',
+        operation: 'enrichment-analysis',
+        requestedEntityTypes,
+        allowContextFallback: true,
+      };
+    }
+
+    if (/\bcommunit(?:y|ies)\b|\bmodules?\b/.test(normalized)) {
+      return {
+        primary: 'community-detection',
+        operation: 'community-detection',
+        requestedEntityTypes,
+        allowContextFallback: false,
+      };
+    }
+
+    if (
+      /\brelationship types?\b/.test(normalized) ||
+      /\brelationships?\b.*\bdominat/.test(normalized) ||
+      /\bdominant\b.*\brelationships?\b/.test(normalized) ||
+      /\bhow are\b.*\bconnected\b/.test(normalized)
+    ) {
+      return {
+        primary: 'graph-relationship-analysis',
+        operation: 'graph-relationship-analysis',
+        requestedEntityTypes,
+        allowContextFallback: true,
+      };
+    }
+
+    if (
+      /\bschema\b/.test(normalized) ||
+      /\bnode types?\b/.test(normalized) ||
+      /\bwhat .* are present\b/.test(normalized) ||
+      /\bpresent in (?:the )?(?:graph|network|subgraph)\b/.test(normalized)
+    ) {
+      return {
+        primary: 'schema-analysis',
+        operation: 'schema-analysis',
+        requestedEntityTypes,
+        allowContextFallback: false,
+      };
+    }
+
+    if (
+      /\bmetrics?\b/.test(normalized) ||
+      /\bstatistics?\b/.test(normalized) ||
+      /\bhubs?\b/.test(normalized) ||
+      /\bcentral\b/.test(normalized) ||
+      /\bclusters?\b/.test(normalized) ||
+      /\bcomponents?\b/.test(normalized) ||
+      /\bdensity\b/.test(normalized) ||
+      /\btopology\b/.test(normalized)
+    ) {
+      return {
+        primary: 'network-statistics',
+        operation: 'network-statistics',
+        requestedEntityTypes,
+        allowContextFallback: false,
+      };
+    }
+
+    if (/\bexposures?\b|\benvironmental\b|\btoxicant\b/.test(normalized)) {
+      return {
+        primary: 'exposure-analysis',
+        operation: 'exposure-analysis',
+        requestedEntityTypes: requestedEntityTypes.length > 0 ? requestedEntityTypes : ['Exposure'],
+        allowContextFallback: true,
+      };
+    }
+
+    if (
+      /\bdrug targets?\b/.test(normalized) ||
+      /\bmechanisms?\b/.test(normalized) ||
+      /\bcontraindications?\b/.test(normalized) ||
+      /\boff-?label\b/.test(normalized) ||
+      /\bapproved drugs?\b/.test(normalized)
+    ) {
+      return {
+        primary: 'drug-discovery',
+        operation: 'drug-discovery',
+        requestedEntityTypes,
+        allowContextFallback: true,
+      };
+    }
+
+    if (
+      /\binterpret\b/.test(normalized) ||
+      /\bgraph theme\b/.test(normalized) ||
+      /\bbiological narrative\b/.test(normalized) ||
+      /\bcentral concepts?\b/.test(normalized)
+    ) {
+      return {
+        primary: 'graph-explanation',
+        operation: 'graph-explanation',
+        requestedEntityTypes,
+        allowContextFallback: false,
+      };
+    }
+
     if (queryRoute.category === 'GRAPH_QUERY' || queryRoute.category === 'MIXED_QUERY') {
       if (
         /\bsummariz(?:e|ing)\b|\bdescribe\b|\bexplain this subgraph\b|\bexplain these nodes\b/.test(normalized) ||
@@ -216,6 +335,21 @@ export class IntentAgentService {
     if (/\bpathways?\b/.test(normalizedQuery)) {
       requestedEntityTypes.add('Pathway');
     }
+    if (/\bbiological processes?\b/.test(normalizedQuery)) {
+      requestedEntityTypes.add('BiologicalProcess');
+    }
+    if (/\bmolecular functions?\b/.test(normalizedQuery)) {
+      requestedEntityTypes.add('MolecularFunction');
+    }
+    if (/\bcellular components?\b/.test(normalizedQuery)) {
+      requestedEntityTypes.add('CellularComponent');
+    }
+    if (/\banatom(y|ical)\b|\borgans?\b|\btissues?\b/.test(normalizedQuery)) {
+      requestedEntityTypes.add('Anatomy');
+    }
+    if (/\bexposures?\b|\benvironmental\b|\btoxicant\b/.test(normalizedQuery)) {
+      requestedEntityTypes.add('Exposure');
+    }
     if (/\bdrugs?\b/.test(normalizedQuery)) {
       requestedEntityTypes.add('Drug');
     }
@@ -244,6 +378,14 @@ export class IntentAgentService {
         /\bcomponents?\b/.test(normalizedQuery) ||
         /\btopology\b/.test(normalizedQuery) ||
         /\bnode types?\b/.test(normalizedQuery) ||
+        /\bschema\b/.test(normalizedQuery) ||
+        /\brelationship types?\b/.test(normalizedQuery) ||
+        /\bmetrics?\b/.test(normalizedQuery) ||
+        /\bstatistics?\b/.test(normalizedQuery) ||
+        /\bcommunities?\b/.test(normalizedQuery) ||
+        /\bmodules?\b/.test(normalizedQuery) ||
+        /\bontology\b/.test(normalizedQuery) ||
+        /\benrich(?:ed|ment)?\b/.test(normalizedQuery) ||
         /\bwhat .* are present\b/.test(normalizedQuery) ||
         /\bmolecular functions?\b/.test(normalizedQuery) ||
         /\bcellular components?\b/.test(normalizedQuery) ||

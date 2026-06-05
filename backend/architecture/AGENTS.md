@@ -1,247 +1,243 @@
-# Agents
+# Agents And Services
 
 ## Overview
+The current implementation uses specialized services under one orchestrator. Each service has a narrow responsibility, explicit inputs, explicit outputs, and a fixed tool surface.
 
-The backend graph-agent runtime is implemented as a single NestJS module with explicit service boundaries. It is not a free-form multi-agent swarm. `GraphAgentService` is the orchestrator and delegates to specialized agents/services with typed inputs and outputs.
+## Orchestrator
+### `GraphAgentService`
+- Responsibility: end-to-end request execution.
+- Inputs:
+  - latest user query
+  - selected nodes and edges
+  - visible network context
+  - session id
+- Outputs:
+  - assistant text
+  - evidence bundle
+  - graph actions
+  - updated conversation state
+- Owns:
+  - orchestration order
+  - unresolved-mention blocking
+  - replanning loop
+  - stream payload emission
 
-## Runtime Roles
-
-### GraphAgentService
-
-- role: top-level orchestrator for a single `/graph-agent/chat` request
-- responsibilities:
-  - load prior conversation graph state
-  - build graph context from the request
-  - run query routing
-  - conditionally run extraction and resolution
-  - invoke planning, retrieval, evidence assessment, replanning, and reasoning
-  - stream `graphEvidence`, `graphActions`, `graphState`, and answer text
-
-### QueryRouterService
-
-- role: execution gatekeeper
-- inputs:
+## Routing And Context
+### `QueryRouterService`
+- Responsibility: classify the request before downstream execution begins.
+- Inputs:
   - query text
-  - selected node context
-  - selected edge context
-- outputs:
-  - `category`
-  - `intent`
+  - selected graph context
+  - visible graph presence
+- Outputs:
+  - category
+  - intent
   - `requiresEntityExtraction`
   - `requiresEntityResolution`
   - `requiresGraphContext`
-  - `preferredExecutor`
-- notes:
-  - graph-subject queries can bypass entity extraction and entity resolution
-  - visible-graph questions such as `Summarize the network` should route into graph analysis
+  - preferred executor
+- Owns:
+  - graph query vs entity query vs mixed query gating
 
-### GraphContextAgentService
-
-- role: graph-context interpreter
-- inputs:
-  - selected nodes
-  - selected edges
-  - visible graph context from the frontend
-  - session graph state
-  - routed query
-- outputs:
+### `GraphContextAgentService`
+- Responsibility: determine what graph the user is talking about.
+- Inputs:
+  - query text
+  - router decision
+  - selected nodes and edges
+  - visible graph context
+  - session state
+- Outputs:
   - active anchors
-  - selected node and edge types
-  - visible node and edge ids
-  - graph scope
-  - graph reference flags
-- priority:
-  1. selected nodes and edges
-  2. visible graph
-  3. session graph
+  - selected graph context
+  - visible graph context
+  - graph scope mode
+  - graph-reference flags
+- Owns:
+  - graph context priority
+  - selected-vs-visible-vs-session fallback
 
-### IntentAgentService
-
-- role: task classifier
-- inputs:
-  - query text
-  - routed query
-  - graph context
-- outputs:
-  - `primary`
-  - `operation`
-  - `requestedEntityTypes`
-  - `allowContextFallback`
-  - optional radius
-- notes:
-  - classifies graph-wide analysis, graph expansion, relationship queries, pathway/drug/guideline requests, and guarded Cypher requests
-
-### EntityExtractionService
-
-- role: explicit mention and concept extractor
-- inputs:
-  - query text
-- outputs:
-  - explicit mention spans
-  - explicit concept spans
-  - graph-reference phrases
+## Extraction And Resolution
+### `EntityExtractionService`
+- Responsibility: extract explicit mentions and concepts only.
+- Inputs:
+  - user query
+- Outputs:
+  - mentions
+  - concepts
+  - selection references
   - operator signals
-- constraints:
-  - extracts only explicit user text
-  - does not invent or normalize biomedical entities
+- Owns:
+  - mention extraction schema
+  - no-invention extraction boundary
 
-### EntityResolutionAgentService
+### `IntentAgentService`
+- Responsibility: classify operational intent.
+- Inputs:
+  - query text
+  - router output
+  - graph context
+- Outputs:
+  - primary intent family
+  - operation family
+  - requested entity types
+  - context-fallback allowance
+- Owns:
+  - classification of summary, schema, relationship, ontology, enrichment, community, exposure, drug-discovery, and neighborhood intents
 
-- role: OptimusKG-backed mention resolver
-- inputs:
+### `EntityResolutionAgentService`
+- Responsibility: resolve explicit mentions against OptimusKG.
+- Inputs:
   - extracted mentions
   - extracted concepts
-- outputs:
-  - resolved entities with confidence and resolution stage
-- resolution stages:
+- Outputs:
+  - resolved entities
+  - staged resolution confidence
+- Owns:
   - exact
   - alias
   - synonym
   - identifier
-  - semantic
-- notes:
-  - graph-visible local resolution is attempted earlier in `GraphAgentService` before global KG resolution
+  - semantic fallback ranking
 
-### RetrievalPlanningAgentService
-
-- role: operation planner
-- inputs:
-  - routed query
-  - intent
+## Planning And Execution
+### `RetrievalPlanningAgentService`
+- Responsibility: convert intent plus context into typed plan steps.
+- Inputs:
+  - router output
   - graph context
+  - intent
   - extracted query
   - resolved entities
-  - conversation graph state
-- outputs:
+  - session state
+- Outputs:
   - ordered `RetrievalPlanStep[]`
-- behavior:
-  - emits operation-first steps
-  - prefers graph-analysis for graph-subject queries
-  - uses visible graph as the active subject when nothing is selected and the query targets the rendered network
+- Owns:
+  - tool selection
+  - graph-analysis scope selection
+  - typed traversal planning
+  - operation-specific branching
 
-### RetrievalOperationsService
+### `GraphAnalysisService`
+- Responsibility: analyze selected graphs, visible graphs, and ontology/enrichment/topology structure.
+- Inputs:
+  - scoped node ids
+  - scoped edge ids
+  - optional type filters
+  - optional ontology root id
+- Outputs:
+  - evidence items
+  - graph payload
+  - highlight nodes
+  - warnings
+- Owns:
+  - summaries
+  - schema inspection
+  - relationship analysis
+  - node-type analysis
+  - topology metrics
+  - community detection
+  - ontology traversal
+  - enrichment
+  - graph explanation
 
-- role: entity-centric retrieval layer
-- responsibilities:
-  - node detail loading
-  - related-entity traversals
-  - drug indication lookup
-  - guideline retrieval
-  - relationship evidence
+### `RetrievalOperationsService`
+- Responsibility: perform entity-anchored retrieval and typed relation lookup.
+- Inputs:
+  - typed plan step
+  - resolved entities
+- Outputs:
+  - evidence items
+  - graph payload
+  - path highlights
+  - warnings
+- Owns:
+  - node details
   - shortest path
-  - neighborhood loading
-  - bounded expansion
+  - related-entity retrieval
+  - typed multi-hop traversals
+  - drug, disease, gene, pathway, anatomy, and exposure retrieval helpers
+  - ambiguity candidate lookup
 
-### CypherAgentService
+### `CypherAgentService`
+- Responsibility: enforce read-only Cypher safety and execute explicit Cypher requests.
+- Inputs:
+  - user Cypher
+  - validated parameters
+- Outputs:
+  - rows
+  - cost metadata
+- Owns:
+  - read-only guardrails
+  - unsafe-clause rejection
 
-- role: read-only Cypher boundary
-- responsibilities:
-  - validate explicit Cypher
-  - estimate heuristic query cost
-  - execute guarded read-only Cypher
-- notes:
-  - fallback only
-  - planner does not treat Cypher as the default path
-
-### GraphAnalysisService
-
-- role: graph-native analytics over selected graphs or visible graphs
-- responsibilities:
-  - selected-node summaries
-  - visible-subgraph summaries
-  - node comparison
-  - shared-pathway, shared-disease, shared-gene, and common-neighbor analysis
-  - hub and bridge detection
-  - component and cluster analysis
-  - connection explanation
-  - topology analysis
-  - ontology diagnostics
-  - schema-aware node-type summaries across all visible node types
-- outputs:
-  - graph evidence items
-  - graph payloads for UI updates
-  - highlight node ids
-
-### GraphRetrieverService
-
-- role: execution coordinator
-- responsibilities:
-  - execute `graph-analysis`, `retrieval-operations`, and `cypher-agent` steps
-  - collect evidence and warnings
-  - emit graph actions
-- notes:
-  - does not own planning logic
-  - does not own entity-centric retrieval logic
-
-### EvidenceAgentService
-
-- role: evidence bundler and assessor
-- responsibilities:
-  - rank evidence items
-  - build `GraphEvidenceBundle`
-  - compute confidence, insufficiency, provenance highlights, and replan signals
-
-### ReplanningAgentService
-
-- role: bounded replan controller
-- responsibilities:
-  - inspect current evidence
-  - request additional retrieval when evidence is weak or incomplete
-- constraints:
-  - bounded by a small retry limit
-
-### ReasoningAgentService
-
-- role: grounded answer generator
-- inputs:
-  - query
-  - graph context
-  - evidence bundle
+### `GraphRetrieverService`
+- Responsibility: run the plan and collect executor outputs.
+- Inputs:
+  - plan steps
+  - resolved entities
+- Outputs:
+  - unified evidence
+  - graph delta
   - graph actions
-- outputs:
-  - streamed answer text
-  - fallback answer when model access is unavailable
-- constraints:
-  - use graph evidence as the source of truth
-  - avoid inventing unsupported biomedical claims
+  - warnings
+- Owns:
+  - executor dispatch
+  - graph-action creation
 
-### ConversationGraphStateService
+## Evidence And Response
+### `EvidenceAgentService`
+- Responsibility: assess evidence quality and bundle the result.
+- Inputs:
+  - evidence items
+  - resolved entities
+  - plan
+  - warnings
+  - graph context ids
+- Outputs:
+  - evidence bundle
+  - confidence assessment
+  - replan signal
+- Owns:
+  - evidence scoring
+  - insufficiency detection
 
-- role: session memory and caching layer
-- backing store:
-  - Redis
-- responsibilities:
-  - persist selected ids
-  - persist visible graph ids
-  - persist active entities
-  - persist frontier and retrieved ids
-  - persist evidence cache and prior queries
+### `ReplanningAgentService`
+- Responsibility: add bounded recovery steps when evidence is weak.
+- Inputs:
+  - current evidence bundle
+  - current plan
+  - graph context
+  - intent
+- Outputs:
+  - appended plan steps
+- Owns:
+  - bounded replanning only
 
-## Supporting Types
+### `ReasoningAgentService`
+- Responsibility: produce the final answer from the evidence bundle.
+- Inputs:
+  - query
+  - evidence bundle
+  - resolved entities
+  - graph actions
+- Outputs:
+  - grounded text
+  - suggestions
+- Owns:
+  - graph-grounded synthesis
+  - fallback wording when evidence is partial
 
-The main runtime contracts live in `backend/src/graph-agent/graph-agent.types.ts`:
-
-- `QueryRoute`
-- `GraphContextResult`
-- `QueryIntentClassification`
-- `ResolvedEntity`
-- `RetrievalPlanStep`
-- `GraphEvidenceBundle`
-- `ConversationGraphState`
-- `GraphAction`
-
-## What The System Is
-
-The current implementation is:
-
-- a modular sequential planner/executor
-- tool-orchestrated
-- graph-context-aware
-- stateful across turns
-- specialized by service boundary rather than by autonomous agents
-
-It is not:
-
-- a monolithic single-prompt graph chatbot
-- a free-form multi-agent debate system
-- a frontend-driven reasoning architecture
+## Memory
+### `ConversationGraphStateService`
+- Responsibility: persist the graph conversation state in Redis.
+- Inputs:
+  - current session state
+  - latest evidence bundle
+  - selected and visible graph ids
+- Outputs:
+  - bounded persisted state
+- Owns:
+  - trimming
+  - session restore
+  - state persistence

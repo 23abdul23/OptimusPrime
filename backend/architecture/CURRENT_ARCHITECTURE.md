@@ -1,156 +1,87 @@
 # Current Architecture
 
-## Summary
+## Scope
+The OptimusKG graph agent is implemented as a single NestJS module with specialized services. It is not a free-form multi-agent runtime. It is a typed orchestrator that routes each query through graph-context resolution, intent classification, retrieval planning, graph execution, evidence assessment, optional replanning, and grounded answer synthesis.
 
-Optimus Explorer currently uses a server-side graph-agent architecture built on NestJS, Neo4j, Redis, and a Next.js frontend. The frontend is responsible for graph rendering, user interaction, and packaging the current graph context. The backend is responsible for routing, planning, retrieval, graph analysis, evidence construction, memory, and grounded answer generation.
+## Runtime Shape
+- Frontend: Next.js knowledge-graph UI, Sigma graph canvas, chat window, selection state, visible-graph context, follow-up suggestions, answer-to-graph linking.
+- Backend: `GraphAgentModule` inside the main NestJS API.
+- Data stores: Neo4j for graph truth, Redis for session graph memory and caching.
+- LLM usage: limited to extraction/intention/reasoning boundaries; graph existence and graph facts come from OptimusKG and Neo4j.
 
-## Runtime Stack
-
-### Frontend
-
-- Next.js application
-- Sigma.js graph rendering
-- graph selection state in the KG store
-- KG chat UI that sends:
-  - latest user message
-  - selected node context
-  - selected edge context
-  - visible graph context
-  - session id
-
-### Backend
-
-- NestJS `GraphAgentModule`
-- Neo4j as graph source of truth
-- Redis for throttling and conversation graph state
-- OpenAI-compatible reasoning path with deterministic fallback
-
-## Main Request Path
-
-```text
-Frontend KG Chat
-        ↓
-POST /graph-agent/chat
-        ↓
-GraphAgentController
-        ↓
-GraphAgentService
-        ↓
-Query Router
-        ↓
-Graph Context Agent
-        ↓
-Intent Agent
-        ↓
-Optional Extraction / Resolution
-        ↓
-Retrieval Planning
-        ↓
-Graph Analysis / Retrieval Operations / Cypher
-        ↓
-Evidence Agent
-        ↓
-Optional Replanning
-        ↓
-Reasoning Agent
-        ↓
-Streamed answer + graph evidence + graph actions + graph state
-```
-
-## Architectural Priorities
-
-### Source of Truth
-
-- Neo4j / OptimusKG is the source of truth for entity existence and graph structure
-- the visible graph in the UI is the source of truth for the user’s current analysis context
-- the LLM is not the source of truth for biomedical facts
-
-### Graph Context Priority
-
-When deciding what graph the user means, the system should prefer:
-
-```text
-Selected Nodes / Edges
-        ↓
-Visible Graph
-        ↓
-Session Graph
-```
-
-### Execution Priority
-
-- graph-subject questions should use graph-analysis directly
-- entity-subject questions should use retrieval operations
-- Cypher is fallback only
-
-## Implemented Backend Components
-
-- `GraphAgentController`
-- `GraphAgentService`
+## Implemented Backend Services
 - `QueryRouterService`
+  Decides query category, graph-vs-entity strategy, and whether extraction and resolution are required.
 - `GraphContextAgentService`
-- `IntentAgentService`
+  Resolves the active graph subject from selected graph, visible graph, or session graph.
 - `EntityExtractionService`
+  Extracts explicit mentions, concepts, selection references, and operator signals.
+- `IntentAgentService`
+  Classifies the request into operational intent families.
 - `EntityResolutionAgentService`
+  Resolves explicit mentions against OptimusKG metadata and aliases.
 - `RetrievalPlanningAgentService`
-- `RetrievalOperationsService`
-- `CypherAgentService`
+  Emits typed plan steps with executor, operation, tool, and parameters.
 - `GraphAnalysisService`
+  Primary executor for graph-wide analysis, visible-network analysis, selected-subgraph analysis, topology analysis, ontology traversal, enrichment, community detection, and graph explanation.
+- `RetrievalOperationsService`
+  Primary executor for entity-anchored typed retrieval operations and guarded traversal helpers.
+- `CypherAgentService`
+  Validates and executes explicit read-only Cypher when the request is intentionally Cypher-oriented.
 - `GraphRetrieverService`
+  Runs the typed plan and merges evidence, graph deltas, graph actions, and warnings.
 - `EvidenceAgentService`
+  Scores the retrieved evidence, computes confidence, and decides whether replanning is needed.
 - `ReplanningAgentService`
+  Appends bounded follow-up plan steps when the first pass is insufficient.
 - `ReasoningAgentService`
+  Produces the final grounded response, follow-up suggestions, and UI-facing answer text.
 - `ConversationGraphStateService`
+  Persists per-session graph context in Redis.
 
-## Implemented Graph Analysis Capabilities
+## Execution Model
+1. Frontend sends:
+   - latest user message
+   - `selectedNodeContext`
+   - `selectedEdgeContext`
+   - `networkContext`
+2. Router classifies the request and decides whether extraction and resolution should run.
+3. Graph context agent determines the active graph subject with this priority:
+   - selected graph
+   - visible graph
+   - session graph
+4. Extraction and resolution run only when the router requires them.
+5. Planner emits typed plan steps.
+6. Retriever executes those steps through one of:
+   - `graph-analysis`
+   - `retrieval-operations`
+   - `cypher-agent`
+7. Evidence agent bundles results and may request bounded replanning.
+8. Reasoning agent writes the answer and graph actions.
+9. Session graph state is updated in Redis.
 
-The current graph-analysis layer supports:
+## Current Query Families
+- Graph summary and graph explanation
+- Schema analysis and node-type analysis
+- Relationship analysis and cross-type connection analysis
+- Network statistics and topology inspection
+- Community detection and module analysis
+- Ontology traversal
+- Enrichment analysis
+- Exposure analysis
+- Drug discovery and drug-centric typed retrieval
+- Entity neighborhood and shortest-path analysis
+- Explicit Cypher execution
 
-- summarizing selected nodes and selected subgraphs
-- summarizing visible graphs
-- node comparison
-- shared pathways
-- shared diseases
-- shared genes
-- common neighbors
-- hub detection
-- bridge detection
-- connection explanation
-- cluster analysis
-- topology analysis
-- node-type distribution
-- relationship distribution
-- ontology diagnostics
-
-## Visible-Graph Analysis
-
-The current system is designed to answer graph-wide questions without requiring explicit anchor-node selection. The frontend sends visible graph ids and visible node metadata so the backend can analyze the rendered graph directly.
-
-Examples that should use the visible graph as the active subject:
-
-- `Summarize the network`
-- `What biological relationships dominate this network?`
-- `What molecular functions are present in the graph?`
-- `Which nodes are the main hubs in this graph?`
-
-## Memory Model
-
-Conversation graph state stores:
-
-- active entities
-- resolved node ids
-- retrieved node ids
-- frontier node ids
-- selected node ids
-- selected edge ids
-- visible node ids
-- visible edge ids
-- evidence cache
-- prior queries
-- last retrieval plan
+## Current Design Decisions
+- The graph is the source of truth.
+- Graph-wide analysis no longer requires explicit node selection when a visible graph exists.
+- Query routing can skip extraction and resolution entirely for graph-subject queries.
+- Selected graph context is treated as primary planning context.
+- Generic neighborhood loading is now the fallback, not the default.
 
 ## Current Limitations
-
-- backend typecheck still has unrelated missing dataloader / clickhouse files outside the graph-agent path
-- some graph-analysis paths still depend on what node and edge metadata are available in serialized OptimusKG records
-- the backend does not yet execute a full autonomous graph-analysis workflow planner for every graph-wide analytic variant; it still uses heuristics within the retrieval planning stage
+- Community detection is currently topology-based and approximates communities via connected components; it does not yet use Neo4j GDS algorithms.
+- Enrichment is support-ranked graph enrichment, not full statistical enrichment with p-values.
+- Cypher generation is intentionally constrained; the system mainly supports guarded execution of explicit Cypher requests.
+- Backend repository typecheck still contains unrelated pre-existing dataloader/clickhouse breakage outside the graph-agent module.

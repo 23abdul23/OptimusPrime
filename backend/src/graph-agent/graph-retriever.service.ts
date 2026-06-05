@@ -98,7 +98,7 @@ export class GraphRetrieverService {
   }
 
   private async executeGraphAnalysis(step: RetrievalPlanStep) {
-      switch (step.operation) {
+    switch (step.operation) {
       case 'summarize-selected-nodes':
         return this.graphAnalysisService.summarizeNodes(
           (step.params.nodeIds as string[] | undefined) ?? [],
@@ -108,6 +108,254 @@ export class GraphRetrieverService {
         return this.graphAnalysisService.summarizeSubgraph(
           (step.params.nodeIds as string[] | undefined) ?? [],
           (step.params.edgeIds as string[] | undefined) ?? [],
+        );
+      case 'analyze-schema':
+        return this.graphAnalysisService.analyzeSchema(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          (step.params.edgeIds as string[] | undefined) ?? [],
+        );
+      case 'analyze-node-types':
+        return this.graphAnalysisService.analyzeNodeTypes(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          (step.params.edgeIds as string[] | undefined) ?? [],
+          (step.params.targetTypes as string[] | undefined) ?? [],
+          String(step.params.title ?? 'Node-type analysis'),
+        );
+      case 'analyze-relationship-types':
+        return this.graphAnalysisService.analyzeRelationshipTypes(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          (step.params.edgeIds as string[] | undefined) ?? [],
+          (step.params.sourceTypes as string[] | undefined) ?? [],
+          (step.params.targetTypes as string[] | undefined) ?? [],
+          String(step.params.title ?? 'Relationship analysis'),
+        );
+      case 'find-cross-type-relationships':
+        return this.graphAnalysisService.findCrossTypeRelationships(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          (step.params.edgeIds as string[] | undefined) ?? [],
+          (step.params.sourceTypes as string[] | undefined) ?? [],
+          (step.params.targetTypes as string[] | undefined) ?? [],
+        );
+      case 'find-available-node-types':
+        return this.graphAnalysisService.findAvailableNodeTypes(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          (step.params.edgeIds as string[] | undefined) ?? [],
+        );
+      case 'find-available-relationship-types':
+        return this.graphAnalysisService.findAvailableRelationshipTypes(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          (step.params.edgeIds as string[] | undefined) ?? [],
+        );
+      case 'find-dominant-relationships':
+        return this.graphAnalysisService.findDominantRelationships(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          (step.params.edgeIds as string[] | undefined) ?? [],
+        );
+      case 'rank-relationship-types':
+        return this.graphAnalysisService.rankRelationshipTypes(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          (step.params.edgeIds as string[] | undefined) ?? [],
+        );
+      case 'analyze-relationship-patterns':
+        return this.graphAnalysisService.analyzeRelationshipPatterns(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          (step.params.edgeIds as string[] | undefined) ?? [],
+        );
+      case 'analyze-cross-type-connections':
+        return this.graphAnalysisService.analyzeCrossTypeConnections(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          (step.params.edgeIds as string[] | undefined) ?? [],
+          (step.params.sourceTypes as string[] | undefined) ?? [],
+          (step.params.targetTypes as string[] | undefined) ?? [],
+        );
+      case 'analyze-relationship-density':
+        return this.graphAnalysisService.analyzeRelationshipDensity(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          (step.params.edgeIds as string[] | undefined) ?? [],
+        );
+      case 'analyze-genes':
+        return this.graphAnalysisService.analyzeGenes(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          (step.params.edgeIds as string[] | undefined) ?? [],
+        );
+      case 'analyze-diseases':
+        return this.graphAnalysisService.analyzeDiseases(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          (step.params.edgeIds as string[] | undefined) ?? [],
+        );
+      case 'analyze-drugs':
+        return this.graphAnalysisService.analyzeDrugs(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          (step.params.edgeIds as string[] | undefined) ?? [],
+        );
+      case 'analyze-pathways':
+        return this.graphAnalysisService.analyzePathways(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          (step.params.edgeIds as string[] | undefined) ?? [],
+        );
+      case 'analyze-phenotypes':
+        return this.graphAnalysisService.analyzePhenotypes(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          (step.params.edgeIds as string[] | undefined) ?? [],
+        );
+      case 'analyze-anatomy':
+        return this.graphAnalysisService.analyzeAnatomy(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          (step.params.edgeIds as string[] | undefined) ?? [],
+        );
+      case 'analyze-molecular-functions':
+        return this.graphAnalysisService.analyzeMolecularFunctions(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          (step.params.edgeIds as string[] | undefined) ?? [],
+        );
+      case 'analyze-cellular-components':
+        return this.graphAnalysisService.analyzeCellularComponents(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          (step.params.edgeIds as string[] | undefined) ?? [],
+        );
+      case 'analyze-exposures':
+        return this.graphAnalysisService.analyzeExposures(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          (step.params.edgeIds as string[] | undefined) ?? [],
+        );
+      case 'compute-graph-metrics':
+        return this.graphAnalysisService.computeGraphMetrics(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          (step.params.edgeIds as string[] | undefined) ?? [],
+        );
+      case 'compute-node-type-distribution':
+        return this.graphAnalysisService.computeNodeTypeDistribution(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          (step.params.edgeIds as string[] | undefined) ?? [],
+        );
+      case 'compute-relationship-distribution':
+        return this.graphAnalysisService.computeRelationshipDistribution(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          (step.params.edgeIds as string[] | undefined) ?? [],
+        );
+      case 'compute-centrality-metrics':
+        return this.graphAnalysisService.computeCentralityMetrics(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          (step.params.edgeIds as string[] | undefined) ?? [],
+        );
+      case 'compute-density-metrics':
+        return this.graphAnalysisService.computeDensityMetrics(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          (step.params.edgeIds as string[] | undefined) ?? [],
+        );
+      case 'compute-component-statistics':
+        return this.graphAnalysisService.computeComponentStatistics(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          (step.params.edgeIds as string[] | undefined) ?? [],
+        );
+      case 'detect-communities':
+        return this.graphAnalysisService.detectCommunities(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          (step.params.edgeIds as string[] | undefined) ?? [],
+          (step.params.focusTypes as string[] | undefined) ?? [],
+          String(step.params.title ?? 'Detected communities'),
+        );
+      case 'detect-disease-modules':
+        return this.graphAnalysisService.detectDiseaseModules(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          (step.params.edgeIds as string[] | undefined) ?? [],
+        );
+      case 'detect-functional-modules':
+        return this.graphAnalysisService.detectFunctionalModules(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          (step.params.edgeIds as string[] | undefined) ?? [],
+        );
+      case 'detect-gene-modules':
+        return this.graphAnalysisService.detectGeneModules(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          (step.params.edgeIds as string[] | undefined) ?? [],
+        );
+      case 'interpret-subgraph':
+        return this.graphAnalysisService.interpretSubgraph(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          (step.params.edgeIds as string[] | undefined) ?? [],
+        );
+      case 'identify-graph-theme':
+        return this.graphAnalysisService.identifyGraphTheme(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          (step.params.edgeIds as string[] | undefined) ?? [],
+        );
+      case 'identify-central-concepts':
+        return this.graphAnalysisService.identifyCentralConcepts(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          (step.params.edgeIds as string[] | undefined) ?? [],
+        );
+      case 'summarize-biological-narrative':
+        return this.graphAnalysisService.summarizeBiologicalNarrative(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          (step.params.edgeIds as string[] | undefined) ?? [],
+        );
+      case 'enrich-diseases':
+        return this.graphAnalysisService.enrichDiseases(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          Number(step.params.limit ?? 20),
+        );
+      case 'enrich-pathways':
+        return this.graphAnalysisService.enrichPathways(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          Number(step.params.limit ?? 20),
+        );
+      case 'enrich-phenotypes':
+        return this.graphAnalysisService.enrichPhenotypes(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          Number(step.params.limit ?? 20),
+        );
+      case 'enrich-biological-processes':
+        return this.graphAnalysisService.enrichBiologicalProcesses(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          Number(step.params.limit ?? 20),
+        );
+      case 'enrich-molecular-functions':
+        return this.graphAnalysisService.enrichMolecularFunctions(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          Number(step.params.limit ?? 20),
+        );
+      case 'enrich-cellular-components':
+        return this.graphAnalysisService.enrichCellularComponents(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          Number(step.params.limit ?? 20),
+        );
+      case 'enrich-anatomy':
+        return this.graphAnalysisService.enrichAnatomy(
+          (step.params.nodeIds as string[] | undefined) ?? [],
+          Number(step.params.limit ?? 20),
+        );
+      case 'find-parents':
+        return this.graphAnalysisService.findParents(
+          String(step.params.rootId ?? step.params.nodeId ?? ((step.params.nodeIds as string[] | undefined) ?? [])[0] ?? ''),
+          Number(step.params.maxDepth ?? 1),
+        );
+      case 'find-children':
+        return this.graphAnalysisService.findChildren(
+          String(step.params.rootId ?? step.params.nodeId ?? ((step.params.nodeIds as string[] | undefined) ?? [])[0] ?? ''),
+          Number(step.params.maxDepth ?? 1),
+        );
+      case 'find-ancestors':
+        return this.graphAnalysisService.findAncestors(
+          String(step.params.rootId ?? step.params.nodeId ?? ((step.params.nodeIds as string[] | undefined) ?? [])[0] ?? ''),
+          Number(step.params.maxDepth ?? 4),
+        );
+      case 'find-descendants':
+        return this.graphAnalysisService.findDescendants(
+          String(step.params.rootId ?? step.params.nodeId ?? ((step.params.nodeIds as string[] | undefined) ?? [])[0] ?? ''),
+          Number(step.params.maxDepth ?? 4),
+        );
+      case 'find-ontology-roots':
+        return this.graphAnalysisService.findOntologyRoots(
+          String(step.params.rootId ?? step.params.nodeId ?? ((step.params.nodeIds as string[] | undefined) ?? [])[0] ?? ''),
+          Number(step.params.maxDepth ?? 6),
+        );
+      case 'explore-ontology-hierarchy':
+        return this.graphAnalysisService.exploreOntologyHierarchy(
+          String(step.params.rootId ?? step.params.nodeId ?? ((step.params.nodeIds as string[] | undefined) ?? [])[0] ?? ''),
+          (step.params.direction as 'parents' | 'children' | 'ancestors' | 'descendants' | 'roots' | undefined) ?? 'descendants',
+          Number(step.params.maxDepth ?? 4),
+          String(step.params.title ?? 'Ontology hierarchy'),
         );
       case 'compare-nodes':
         return this.graphAnalysisService.compareNodes((step.params.nodeIds as string[] | undefined) ?? []);

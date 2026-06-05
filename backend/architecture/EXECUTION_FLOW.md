@@ -1,192 +1,96 @@
 # Execution Flow
 
-## End-To-End Flow
+## End-To-End Request Flow
+1. The frontend sends the latest user message plus:
+   - `selectedNodeContext`
+   - `selectedEdgeContext`
+   - `networkContext`
+2. `QueryRouterService` decides:
+   - query category
+   - operational intent
+   - whether entity extraction should run
+   - whether entity resolution should run
+   - whether graph context is required
+3. `GraphContextAgentService` resolves the active graph subject.
+4. `EntityExtractionService` runs only when the router requires it.
+5. `IntentAgentService` classifies the request family.
+6. `EntityResolutionAgentService` runs only when the router requires it.
+7. `RetrievalPlanningAgentService` creates typed plan steps.
+8. `GraphRetrieverService` dispatches each step to:
+   - `GraphAnalysisService`
+   - `RetrievalOperationsService`
+   - `CypherAgentService`
+9. `EvidenceAgentService` builds the evidence bundle and decides whether bounded replanning is needed.
+10. `ReplanningAgentService` optionally appends follow-up steps.
+11. `ReasoningAgentService` writes the final grounded answer.
+12. `ConversationGraphStateService` persists the new session state.
 
-```text
-User Query
-+ Selected Graph Context
-+ Visible Graph Context
-+ Session Id
-        ↓
-Frontend KG Chat Payload Builder
-        ↓
-POST /graph-agent/chat
-        ↓
-GraphAgentController
-        ↓
-GraphAgentService
-        ↓
-Load ConversationGraphState
-        ↓
-QueryRouterService
-        ↓
-GraphContextAgentService
-        ↓
-IntentAgentService
-        ↓
-Optional EntityExtractionService
-        ↓
-Optional local visible-graph resolution
-        ↓
-Optional EntityResolutionAgentService
-        ↓
-RetrievalPlanningAgentService
-        ↓
-GraphRetrieverService
-    ├─ GraphAnalysisService
-    ├─ RetrievalOperationsService
-    └─ CypherAgentService
-        ↓
-EvidenceAgentService
-        ↓
-Optional ReplanningAgentService
-        ↓
-ReasoningAgentService
-        ↓
-Save ConversationGraphState
-        ↓
-Stream answer + evidence + graph actions + graph state
-```
+## Graph Context Priority
+The planner and graph-analysis executor use this order:
+1. Selected graph
+2. Visible graph
+3. Session graph
 
-## Stage Details
+## Stage Gating
+### Graph-subject query
+Example: `Summarize these selected nodes`
+- Router marks the request as `GRAPH_QUERY`
+- Extraction is skipped
+- Resolution is skipped
+- Planner uses selected graph ids directly
+- Graph analysis executes immediately
 
-### 1. Frontend Context Packaging
+### Mixed query
+Example: `How do these selected genes relate to Parkinson disease?`
+- Router marks the request as `MIXED_QUERY`
+- Graph context is primary
+- Extraction resolves explicit non-graph mentions only
+- Planner mixes selected graph anchors with resolved disease anchors
 
-The frontend KG chat request contains:
+### Entity query
+Example: `Which diseases are associated with APOE?`
+- Router marks the request as `ENTITY_QUERY`
+- Extraction and resolution both run
+- Planner emits entity-anchored retrieval steps
 
-- latest user message only
-- `selectedNodeContext`
-- `selectedEdgeContext`
-- `networkContext`
-  - visible node ids
-  - visible edge ids
-  - visible node labels and types
-  - visible node-type distribution
-  - selected ids
-  - total visible node and edge counts
-
-### 2. Query Routing
-
-`QueryRouterService` decides:
-
-- what category the query belongs to
-- whether extraction is required
-- whether resolution is required
-- whether graph context is required
-- which executor family is preferred
-
-This allows graph-subject queries to bypass unnecessary entity-centric steps.
-
-### 3. Graph Context Build
-
-`GraphContextAgentService` determines the effective graph subject using:
-
-```text
-Selected Nodes / Edges
-        ↓
-Visible Graph
-        ↓
-Session Graph
-```
-
-It returns:
-
-- active anchors
-- visible node ids
-- visible edge ids
-- selected node and edge types
-- graph scope
-- graph reference flags
-
-### 4. Intent Classification
-
-`IntentAgentService` classifies the task into operations such as:
-
-- graph summary
-- graph comparison
-- graph commonality
-- graph connections
+## Execution Paths
+### Graph analysis path
+Used for:
+- graph summaries
+- schema analysis
 - relationship analysis
-- pathway search
-- drug search
-- graph expansion
-- network summary
-- guarded Cypher
+- node-type analysis
+- network statistics
+- community detection
+- ontology traversal
+- enrichment
+- graph explanation
 
-### 5. Optional Extraction And Resolution
+### Retrieval operations path
+Used for:
+- node details
+- shortest path
+- typed entity traversals
+- drug, disease, gene, pathway, anatomy, and exposure lookups
+- candidate ranking and ambiguity support
 
-If the route requires it:
+### Cypher path
+Used only for explicit Cypher-style requests after validation.
 
-- `EntityExtractionService` extracts explicit mentions and concepts
-- `GraphAgentService` first attempts local matching against visible graph nodes
-- `EntityResolutionAgentService` resolves remaining mentions against OptimusKG
+## Replanning
+Replanning is bounded.
+- Maximum attempts: 2
+- Trigger: evidence bundle marks the first pass as insufficient
+- Effect: append targeted steps, do not restart the whole pipeline
 
-If the route does not require extraction or resolution, the system moves directly to planning.
+## Frontend Response Contract
+The stream can emit:
+- assistant text
+- `graphEvidence`
+- `graphActions`
+- `graphState`
 
-### 6. Retrieval Planning
-
-`RetrievalPlanningAgentService` emits `RetrievalPlanStep[]`.
-
-Graph-wide analysis should plan directly against the active graph subject, especially when:
-
-- the user selected nodes or edges
-- the visible graph is the subject
-
-Examples:
-
-- `summarize-selected-nodes`
-- `summarize-visible-subgraph`
-- `find-hub-nodes`
-- `analyze-cluster`
-
-### 7. Plan Execution
-
-`GraphRetrieverService` dispatches steps to:
-
-- `GraphAnalysisService` for graph-native analysis
-- `RetrievalOperationsService` for entity-centric retrieval
-- `CypherAgentService` for guarded Cypher
-
-The retriever returns:
-
-- evidence items
-- graph actions
-- warnings
-
-### 8. Evidence Assessment
-
-`EvidenceAgentService` builds a `GraphEvidenceBundle` containing:
-
-- ranked evidence items
-- confidence
-- insufficiency flag
-- provenance highlights
-- replan signal
-
-### 9. Replanning
-
-If evidence is weak and the budget allows it, `ReplanningAgentService` may append more steps and rerun retrieval.
-
-### 10. Reasoning
-
-`ReasoningAgentService` generates the answer from the evidence bundle and graph context. If model access is unavailable, it emits a deterministic fallback answer.
-
-### 11. Memory Update
-
-`ConversationGraphStateService` stores the updated session graph state for follow-up turns.
-
-## Important Runtime Rules
-
-### Graph-Wide Queries
-
-Graph-wide questions should not fail just because no nodes are selected. If the visible graph is populated, it is the active graph subject.
-
-### Ambiguous Mentions
-
-If multiple visible-graph candidates match an explicit mention, the backend should ask for clarification instead of arbitrarily choosing one.
-
-### Reasoning Boundaries
-
-- graph evidence drives answers
-- unresolved explicit mentions can block retrieval when necessary
-- graph actions are produced as structured outputs, not inferred in the frontend
+Typical graph actions:
+- `load-subgraph`
+- `focus-nodes`
+- `highlight-path`

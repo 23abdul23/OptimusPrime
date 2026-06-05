@@ -1,91 +1,141 @@
-# Tools
+# Tool Surface
 
-## Summary
+## Purpose
+This file lists the backend tool surface that the planner can emit through `RetrievalPlanStep.tool`.
 
-This document describes the current backend tool surface used by the graph agent. The system is operation-first, but each planned operation still maps to a concrete internal tool or service method.
+## Graph Analysis Tools
+Owned by `GraphAnalysisService`.
 
-## Current Internal Tool Surface
-
-### Graph Analysis Tools
-
-Executed through `GraphAnalysisService`:
-
+### Summary and explanation
 - `summarizeNodes`
 - `summarizeSubgraph`
+- `interpretSubgraph`
+- `identifyGraphTheme`
+- `identifyCentralConcepts`
+- `summarizeBiologicalNarrative`
+
+### Schema and node types
+- `analyzeSchema`
+- `analyzeNodeTypes`
+- `findAvailableNodeTypes`
+- `findAvailableRelationshipTypes`
+- `analyzeGenes`
+- `analyzeDiseases`
+- `analyzeDrugs`
+- `analyzePathways`
+- `analyzePhenotypes`
+- `analyzeAnatomy`
+- `analyzeMolecularFunctions`
+- `analyzeCellularComponents`
+- `analyzeExposures`
+
+### Relationships
+- `analyzeRelationshipTypes`
+- `findCrossTypeRelationships`
+- `findDominantRelationships`
+- `rankRelationshipTypes`
+- `analyzeRelationshipPatterns`
+- `analyzeCrossTypeConnections`
+- `analyzeRelationshipDensity`
+
+### Topology and network statistics
+- `computeGraphMetrics`
+- `computeNodeTypeDistribution`
+- `computeRelationshipDistribution`
+- `computeCentralityMetrics`
+- `computeDensityMetrics`
+- `computeComponentStatistics`
+- `findHubNodes`
+- `findBridgingNodes`
+- `analyzeCluster`
+
+### Shared structure and connection analysis
 - `compareNodes`
 - `findSharedPathways`
 - `findSharedDiseases`
 - `findSharedGenes`
 - `findCommonNeighbors`
-- `findHubNodes`
-- `findBridgingNodes`
 - `explainConnections`
-- `analyzeCluster`
 
-### Retrieval Tools
+### Community detection
+- `detectCommunities`
+- `detectDiseaseModules`
+- `detectFunctionalModules`
+- `detectGeneModules`
 
-Executed through `RetrievalOperationsService`:
+### Ontology
+- `findParents`
+- `findChildren`
+- `findAncestors`
+- `findDescendants`
+- `findOntologyRoots`
+- `exploreOntologyHierarchy`
 
+### Enrichment
+- `enrichDiseases`
+- `enrichPathways`
+- `enrichPhenotypes`
+- `enrichBiologicalProcesses`
+- `enrichMolecularFunctions`
+- `enrichCellularComponents`
+- `enrichAnatomy`
+
+## Retrieval Operation Tools
+Owned by `RetrievalOperationsService`.
+
+### Resolution and lookup support
+- `searchEntities`
+- `resolveEntity`
 - `getNodeDetails`
-- `getRelatedEntities`
+
+### Core graph retrieval
 - `retrieveEvidence`
-- `retrieveClinicalGuidelines`
+- `shortestPath`
 - `retrieveSubgraph`
 - `expandSubgraph`
-- `shortestPath`
+- `getRelatedEntities`
 
-### Cypher Tool
+### Drug discovery
+- `getDrugTargets`
+- `getDrugContraindications`
+- `findOffLabelUses`
+- `getDrugMechanisms`
 
-Executed through `CypherAgentService`:
+### Disease, gene, and pathway retrieval
+- `getDiseaseGenes`
+- `getDiseasePhenotypes`
+- `getGeneDiseases`
+- `getGenePathways`
+- `getPathwayGenes`
+- `getPathwayDiseases`
+
+### Anatomy and exposure retrieval
+- `getAnatomyGenes`
+- `getAnatomyDiseases`
+- `getExposureGenes`
+- `getExposureDiseases`
+- `getExposureProcesses`
+
+### Candidate and ambiguity support
+- `findCandidateEntities`
+- `findVisibleGraphMatches`
+- `rankEntityCandidates`
+
+### Guidelines
+- `retrieveClinicalGuidelines`
+
+## Cypher Tool
+Owned by `CypherAgentService`.
 
 - `executeGuardedCypher`
 
-### State / Resolution Tools
+## State Tool
+Used by the orchestrator for network-summary and state-aware flows.
 
-Used indirectly by orchestration:
-
-- `resolveEntity`
 - `getConversationGraphState`
-- `pruneConversationGraphState`
 
-## Current Characteristics
-
-- all tools are bounded
-- graph actions are structured outputs, not free-form UI instructions
-- evidence is emitted together with tool execution
-- tools are executed server-side; the frontend is not the reasoning engine
-
-## Graph-Wide Analysis Behavior
-
-Graph-wide analysis should use:
-
-```text
-Selected Nodes / Edges
-        ↓
-Visible Graph
-        ↓
-Session Graph
-```
-
-That means graph-analysis tools can operate without explicit entity resolution when the visible graph is already the user’s subject.
-
-## Schema Awareness
-
-Graph-analysis tools should not assume only a narrow subset of biomedical node types. They should work across whatever node types are currently present in the graph, including:
-
-- Gene
-- Protein
-- Disease
-- Drug
-- Pathway
-- Phenotype
-- Anatomy
-- MolecularFunction
-- CellularComponent
-- additional ontology-backed types exposed by OptimusKG
-
-## Tool Selection Guidance
-
-- use graph-analysis for graph-subject queries
-- use retrieval operations for entity-subject queries
-- use Cypher only as a guarded fallback
+## Tool Selection Rules
+- Prefer graph-analysis tools for selected graph, visible graph, or session graph analysis.
+- Prefer retrieval-operation tools for resolved entity lookup and typed traversals.
+- Use `executeGuardedCypher` only for explicit Cypher-style requests.
+- Do not route graph-subject queries through entity resolution unless explicit non-graph entities must be resolved.

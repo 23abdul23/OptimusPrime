@@ -1,92 +1,74 @@
 # Memory Model
 
-## Summary
+## Storage
+Conversation graph memory is stored in Redis through `ConversationGraphStateService`.
 
-The graph agent maintains lightweight session memory in Redis so follow-up questions can refer to prior graph context without resending the entire conversation history.
+## Current State Shape
+Each session stores:
+- `sessionId`
+- `activeEntities`
+- `resolvedNodeIds`
+- `frontierNodeIds`
+- `retrievedNodeIds`
+- `evidenceCache`
+- `priorQueries`
+- `lastPlan`
+- `selectedNodeIds`
+- `selectedEdgeIds`
+- `visibleNodeIds`
+- `visibleEdgeIds`
+- `updatedAt`
 
-## Storage Layer
+## Meaning Of The Fields
+### `activeEntities`
+The current entity anchors most relevant to the active conversation.
 
-- service: `ConversationGraphStateService`
-- backend store: Redis
-- scope: per `sessionId`
+### `resolvedNodeIds`
+Resolved entity ids accumulated across turns.
 
-## Stored State
+### `frontierNodeIds`
+Candidate expansion anchors for follow-up graph exploration.
 
-The session model is:
+### `retrievedNodeIds`
+Nodes already touched by prior retrieval steps.
 
-```ts
-{
-  sessionId: string;
-  activeEntities: ResolvedEntity[];
-  resolvedNodeIds: string[];
-  frontierNodeIds: string[];
-  retrievedNodeIds: string[];
-  evidenceCache: GraphEvidenceItem[];
-  priorQueries: string[];
-  lastPlan: RetrievalPlanStep[];
-  selectedNodeIds: string[];
-  selectedEdgeIds: string[];
-  visibleNodeIds: string[];
-  visibleEdgeIds: string[];
-  updatedAt: string;
-}
-```
+### `evidenceCache`
+Bounded cache of recent evidence items used for follow-up reasoning and replanning.
 
-## Meaning Of Each Field
+### `priorQueries`
+Recent user questions in the current graph session.
 
-### activeEntities
+### `lastPlan`
+The last typed retrieval plan executed for the session.
 
-- the currently important resolved entities for follow-up reasoning
-- includes selected-context entities when the graph selection is part of the subject
+### `selectedNodeIds` and `selectedEdgeIds`
+The last known selected graph context.
 
-### resolvedNodeIds
+### `visibleNodeIds` and `visibleEdgeIds`
+The last known visible graph context.
 
-- ids that were explicitly resolved in prior turns
+## How Memory Is Used
+- Router does not rely on memory for mention extraction.
+- Graph context agent can fall back to session graph when frontend context is absent.
+- Planner can reuse active entities and graph frontier for follow-up questions.
+- Evidence agent uses recent evidence to detect insufficiency and to avoid repeating weak retrieval.
+- Reasoning agent can refer to ongoing graph context without re-querying all prior turns.
 
-### frontierNodeIds
+## Write Policy
+After each request, the backend persists:
+- the latest active entities
+- selected and visible graph ids
+- the latest evidence bundle items
+- the latest plan
+- updated timestamps
 
-- ids surfaced by retrieved evidence that may be useful for expansion or follow-up questions
+The service also deduplicates and truncates arrays so memory stays bounded.
 
-### retrievedNodeIds
+## Current Limits
+- `activeEntities` is trimmed to a small working set.
+- node-id lists are deduplicated and capped.
+- `evidenceCache` is bounded.
+- selection ids are capped more aggressively than visible graph ids.
 
-- ids already loaded through retrieval or graph-analysis results
-
-### evidenceCache
-
-- prior evidence items for session continuity and debugging
-
-### priorQueries
-
-- previous user queries in the session
-
-### lastPlan
-
-- the last retrieval plan emitted by the planner
-
-### selectedNodeIds / selectedEdgeIds
-
-- the last explicit graph selection stored for the session
-
-### visibleNodeIds / visibleEdgeIds
-
-- the last visible graph boundary known to the backend
-
-## What Memory Is Used For
-
-- context fallback for follow-up questions
-- graph expansion planning
-- ranking active entities
-- preserving session graph identity
-- backend debugging and inspection
-
-## What Memory Does Not Do
-
-- it is not the source of truth for the actual graph structure
-- it does not replace Neo4j retrieval
-- it does not permit unsupported reasoning without fresh evidence
-
-## Current Constraints
-
-- memory is intentionally compact
-- the backend still prefers current selection and current visible graph over stale session state
-- visible graph is session memory, but not a substitute for explicit current request context when the frontend can provide it
+## Design Principle
+Memory is graph-context memory, not free-form long-form chat memory. It exists to preserve graph anchors, graph scope, prior evidence, and plan continuity across turns.

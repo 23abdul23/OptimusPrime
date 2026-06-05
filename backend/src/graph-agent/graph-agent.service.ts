@@ -65,6 +65,7 @@ export class GraphAgentService {
           query,
           selectedNodeContext: promptDto.selectedNodeContext ?? [],
           selectedEdgeContext: promptDto.selectedEdgeContext ?? [],
+          networkContext: promptDto.networkContext,
         });
         const graphContext = this.graphContextAgentService.build({
           query,

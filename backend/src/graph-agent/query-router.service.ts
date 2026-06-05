@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type {
+  GraphNetworkContext,
   GraphSelectionEdgeContext,
   GraphSelectionNodeContext,
   PreferredQueryExecutor,
@@ -84,18 +85,52 @@ const ENTITY_SIGNAL_PATTERNS = [
   /\bamyloid beta\b/i,
 ];
 
+const GRAPH_ANALYSIS_PATTERNS = [
+  /\bschema\b/i,
+  /\bnode types?\b/i,
+  /\brelationship types?\b/i,
+  /\bwhat .* are present\b/i,
+  /\bdominant\b.*\brelationships?\b/i,
+  /\brelationships?\b.*\bdominat/i,
+  /\bhubs?\b/i,
+  /\bcentral\b/i,
+  /\bclusters?\b/i,
+  /\bcomponents?\b/i,
+  /\btopology\b/i,
+  /\bdensity\b/i,
+  /\bmetrics?\b/i,
+  /\bstatistics?\b/i,
+  /\bcommunities?\b/i,
+  /\bmodules?\b/i,
+  /\benrich(?:ed|ment)?\b/i,
+  /\bover-?represent(?:ed|ation)?\b/i,
+  /\bontology\b/i,
+  /\bancestor|ancestors|descendant|descendants|parent|parents|child|children|root|roots\b/i,
+  /\bmolecular functions?\b/i,
+  /\bcellular components?\b/i,
+  /\banatom(y|ical)\b/i,
+  /\bphenotypes?\b/i,
+  /\bbiological processes?\b/i,
+  /\bexposures?\b/i,
+];
+
 @Injectable()
 export class QueryRouterService {
   route(params: {
     query: string;
     selectedNodeContext?: GraphSelectionNodeContext[];
     selectedEdgeContext?: GraphSelectionEdgeContext[];
+    networkContext?: GraphNetworkContext;
   }): QueryRoute {
     const query = params.query.trim();
     const normalized = query.toLowerCase();
     const selectedNodeCount = params.selectedNodeContext?.length ?? 0;
     const selectedEdgeCount = params.selectedEdgeContext?.length ?? 0;
     const hasSelectionContext = selectedNodeCount > 0 || selectedEdgeCount > 0;
+    const hasVisibleGraphContext =
+      (params.networkContext?.totalNodes ?? 0) > 0 ||
+      (params.networkContext?.visibleNodeIds?.length ?? 0) > 0 ||
+      (params.networkContext?.visibleEdgeIds?.length ?? 0) > 0;
     const reasons: string[] = [];
 
     const hasCypherSignal = CYPHER_PATTERNS.some((pattern) => pattern.test(query));
@@ -119,8 +154,9 @@ export class QueryRouterService {
     const hasGraphReference = GRAPH_REFERENCE_PATTERNS.some((pattern) => pattern.test(query));
     const hasGraphOperationSignal = GRAPH_OPERATION_PATTERNS.some((pattern) => pattern.test(query));
     const hasExplicitEntitySignal = ENTITY_SIGNAL_PATTERNS.some((pattern) => pattern.test(query));
+    const hasGraphAnalysisSignal = GRAPH_ANALYSIS_PATTERNS.some((pattern) => pattern.test(query));
     const referencesSelectionSubject = hasSelectionContext && SELECTION_SUBJECT_PATTERNS.some((pattern) => pattern.test(query));
-    const routeIntent = this.inferIntent(normalized, hasSelectionContext);
+    const routeIntent = this.inferIntent(normalized, hasSelectionContext, hasVisibleGraphContext);
 
     if (hasGraphReference) {
       reasons.push('query-references-graph-context');
@@ -128,8 +164,14 @@ export class QueryRouterService {
     if (hasGraphOperationSignal) {
       reasons.push('query-uses-graph-operation-verb');
     }
+    if (hasGraphAnalysisSignal) {
+      reasons.push('query-requests-graph-analysis');
+    }
     if (hasSelectionContext) {
       reasons.push('request-carries-selection-context');
+    }
+    if (hasVisibleGraphContext) {
+      reasons.push('request-carries-visible-graph-context');
     }
     if (referencesSelectionSubject) {
       reasons.push('selected-graph-context-is-primary-subject');
@@ -138,7 +180,10 @@ export class QueryRouterService {
       reasons.push('query-contains-entity-like-signal');
     }
 
-    const isGraphSubjectQuery = referencesSelectionSubject || ((hasGraphReference || hasGraphOperationSignal) && hasSelectionContext);
+    const isGraphSubjectQuery =
+      referencesSelectionSubject ||
+      ((hasGraphReference || hasGraphOperationSignal) && (hasSelectionContext || hasVisibleGraphContext)) ||
+      (hasGraphAnalysisSignal && (hasSelectionContext || hasVisibleGraphContext) && !hasCypherSignal);
     const requiresEntityWork = this.requiresEntityWork(routeIntent, isGraphSubjectQuery, hasExplicitEntitySignal);
 
     if (isGraphSubjectQuery && requiresEntityWork) {
@@ -236,7 +281,11 @@ export class QueryRouterService {
     });
   }
 
-  private inferIntent(normalized: string, hasSelectionContext: boolean): QueryRouteIntent {
+  private inferIntent(
+    normalized: string,
+    hasSelectionContext: boolean,
+    hasVisibleGraphContext: boolean,
+  ): QueryRouteIntent {
     if (
       normalized.includes('how many nodes') ||
       normalized.includes('how many edges') ||
@@ -246,6 +295,80 @@ export class QueryRouterService {
       normalized.includes('current graph')
     ) {
       return 'network-summary';
+    }
+
+    if (
+      /\b(ontology|hierarchy|ancestor|ancestors|descendant|descendants|parent|parents|child|children|root|roots)\b/.test(
+        normalized,
+      )
+    ) {
+      return 'ontology-analysis';
+    }
+
+    if (
+      /\benrich(?:ed|ment)?\b/.test(normalized) ||
+      /\bover-?represent(?:ed|ation)?\b/.test(normalized) ||
+      /\boverrepresented\b/.test(normalized)
+    ) {
+      return 'enrichment-analysis';
+    }
+
+    if (/\bcommunities?\b|\bmodules?\b/.test(normalized)) {
+      return 'community-detection';
+    }
+
+    if (
+      /\brelationship types?\b/.test(normalized) ||
+      /\brelationships?\b.*\bdominat/.test(normalized) ||
+      /\bdominant\b.*\brelationships?\b/.test(normalized) ||
+      (/\bhow are\b.*\bconnected\b/.test(normalized) && (hasSelectionContext || hasVisibleGraphContext))
+    ) {
+      return 'graph-relationship-analysis';
+    }
+
+    if (
+      /\bschema\b/.test(normalized) ||
+      /\bnode types?\b/.test(normalized) ||
+      /\bwhat .* are present\b/.test(normalized) ||
+      /\bpresent in (?:the )?(?:graph|network|subgraph)\b/.test(normalized)
+    ) {
+      return 'schema-analysis';
+    }
+
+    if (
+      /\bmetrics?\b/.test(normalized) ||
+      /\bstatistics?\b/.test(normalized) ||
+      /\bhubs?\b/.test(normalized) ||
+      /\bcentral\b/.test(normalized) ||
+      /\bclusters?\b/.test(normalized) ||
+      /\bcomponents?\b/.test(normalized) ||
+      /\bdensity\b/.test(normalized) ||
+      /\btopology\b/.test(normalized)
+    ) {
+      return 'network-statistics';
+    }
+
+    if (/\bexposures?\b|\benvironmental\b|\btoxicant\b/.test(normalized)) {
+      return 'exposure-analysis';
+    }
+
+    if (
+      /\bdrug targets?\b/.test(normalized) ||
+      /\bmechanisms?\b/.test(normalized) ||
+      /\bcontraindications?\b/.test(normalized) ||
+      /\boff-?label\b/.test(normalized) ||
+      /\bapproved drugs?\b/.test(normalized)
+    ) {
+      return 'drug-discovery';
+    }
+
+    if (
+      /\binterpret\b/.test(normalized) ||
+      /\bgraph theme\b/.test(normalized) ||
+      /\bbiological narrative\b/.test(normalized) ||
+      /\bcentral concepts?\b/.test(normalized)
+    ) {
+      return 'graph-explanation';
     }
 
     if (/\bsummariz(?:e|ing)\b|\bdescribe\b|\bexplain this subgraph\b|\bexplain these nodes\b/.test(normalized)) {
@@ -346,7 +469,23 @@ export class QueryRouterService {
       return true;
     }
 
-    return ['path-search', 'relationship-analysis', 'graph-connections', 'drug-search', 'drug-indications', 'pathway-search', 'guideline-search', 'entity-search', 'comparison', 'graph-expansion'].includes(intent);
+    return [
+      'path-search',
+      'relationship-analysis',
+      'graph-connections',
+      'graph-relationship-analysis',
+      'ontology-analysis',
+      'enrichment-analysis',
+      'exposure-analysis',
+      'drug-discovery',
+      'drug-search',
+      'drug-indications',
+      'pathway-search',
+      'guideline-search',
+      'entity-search',
+      'comparison',
+      'graph-expansion',
+    ].includes(intent);
   }
 
   private createRoute(params: {

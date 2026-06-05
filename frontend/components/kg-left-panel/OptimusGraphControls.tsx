@@ -209,6 +209,15 @@ export function OptimusGraphControls() {
   const parsedPathDepth = React.useMemo(() => Math.max(1, Number.parseInt(pathDepth, 10) || 6), [pathDepth]);
 
   React.useEffect(() => {
+    const currentOptions = useKGStore.getState().optimusQueryOptions;
+    if (
+      currentOptions.radius === parsedRadius &&
+      currentOptions.maxNodes === parsedMaxNodes &&
+      currentOptions.degreeLimit === parsedDegreeLimit
+    ) {
+      return;
+    }
+
     useKGStore.setState({
       optimusQueryOptions: {
         radius: parsedRadius,

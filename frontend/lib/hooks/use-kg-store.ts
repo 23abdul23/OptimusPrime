@@ -3,6 +3,23 @@ import { create } from 'zustand';
 import type { EdgeAttributes, NodeAttributes } from '../interface';
 import { Trie } from '../trie';
 
+function arraysShallowEqual(left: string[], right: string[]) {
+  if (left === right) {
+    return true;
+  }
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 /**
  * Knowledge Graph Store - Zustand store for KG visualization state
  * Simplified from GraphStore, removing gene-specific logic
@@ -267,9 +284,18 @@ export const useKGStore = create<KGStore>(set => ({
     }));
   },
   setGraphSelection: selection => {
-    set({
-      selectedNodes: selection.nodeIds,
-      selectedEdges: selection.edgeIds,
+    set(state => {
+      if (
+        arraysShallowEqual(state.selectedNodes, selection.nodeIds) &&
+        arraysShallowEqual(state.selectedEdges, selection.edgeIds)
+      ) {
+        return state;
+      }
+
+      return {
+        selectedNodes: selection.nodeIds,
+        selectedEdges: selection.edgeIds,
+      };
     });
   },
   setInspectedNodeId: nodeId => {

@@ -51,6 +51,94 @@ export class RetrievalOperationsService {
           Number(step.params.limit ?? 20),
         );
 
+      case 'get-drug-targets':
+        return this.executeTypedRelatedOperation(step, ['Gene', 'Protein'], {
+          defaultRelationshipTypes: ['TARGETS', 'TARGET_OF', 'INTERACTS_WITH', 'ASSOCIATED_WITH'],
+        });
+
+      case 'get-drug-contraindications':
+        return this.executeTypedRelatedOperation(step, ['Disease', 'Phenotype'], {
+          defaultRelationshipTypes: ['CONTRAINDICATED_FOR', 'AVOID_IN', 'ASSOCIATED_WITH'],
+        });
+
+      case 'find-off-label-uses':
+        return this.executeTypedRelatedOperation(step, ['Disease'], {
+          defaultRelationshipTypes: ['OFF_LABEL_FOR', 'TREATS', 'ASSOCIATED_WITH'],
+        });
+
+      case 'get-drug-mechanisms':
+        return this.executeTypedRelatedOperation(step, ['Protein', 'Gene', 'Pathway', 'BiologicalProcess'], {
+          defaultRelationshipTypes: ['TARGETS', 'TARGET_OF', 'INTERACTS_WITH', 'PARTICIPATES_IN', 'INVOLVED_IN'],
+          defaultTypeSequences: [
+            ['Protein'],
+            ['Gene'],
+            ['Protein', 'Pathway'],
+            ['Gene', 'Pathway'],
+            ['Protein', 'BiologicalProcess'],
+            ['Gene', 'BiologicalProcess'],
+          ],
+        });
+
+      case 'get-disease-genes':
+        return this.executeTypedRelatedOperation(step, ['Gene', 'Protein'], {
+          defaultRelationshipTypes: ['ASSOCIATED_WITH', 'CAUSAL_TO', 'INTERACTS_WITH', 'PARTICIPATES_IN'],
+        });
+
+      case 'get-disease-phenotypes':
+        return this.executeTypedRelatedOperation(step, ['Phenotype'], {
+          defaultRelationshipTypes: ['ASSOCIATED_WITH', 'HAS_PHENOTYPE', 'PRESENTS_WITH'],
+        });
+
+      case 'get-gene-diseases':
+        return this.executeTypedRelatedOperation(step, ['Disease', 'Phenotype'], {
+          defaultRelationshipTypes: ['ASSOCIATED_WITH', 'CAUSAL_TO', 'INTERACTS_WITH'],
+        });
+
+      case 'get-gene-pathways':
+        return this.executeTypedRelatedOperation(step, ['Pathway', 'BiologicalProcess'], {
+          defaultRelationshipTypes: ['PARTICIPATES_IN', 'INVOLVED_IN', 'ASSOCIATED_WITH'],
+          defaultTypeSequences: [['Pathway'], ['BiologicalProcess']],
+        });
+
+      case 'get-pathway-genes':
+        return this.executeTypedRelatedOperation(step, ['Gene', 'Protein'], {
+          defaultRelationshipTypes: ['PARTICIPATES_IN', 'INVOLVED_IN', 'ASSOCIATED_WITH'],
+        });
+
+      case 'get-pathway-diseases':
+        return this.executeTypedRelatedOperation(step, ['Disease', 'Phenotype'], {
+          defaultRelationshipTypes: ['ASSOCIATED_WITH', 'INVOLVED_IN', 'PARTICIPATES_IN'],
+        });
+
+      case 'get-anatomy-genes':
+        return this.executeTypedRelatedOperation(step, ['Gene', 'Protein'], {
+          defaultRelationshipTypes: ['EXPRESSED_IN', 'LOCALIZED_TO', 'ASSOCIATED_WITH'],
+        });
+
+      case 'get-anatomy-diseases':
+        return this.executeTypedRelatedOperation(step, ['Disease', 'Phenotype'], {
+          defaultRelationshipTypes: ['ASSOCIATED_WITH', 'LOCALIZED_TO', 'AFFECTS'],
+        });
+
+      case 'get-exposure-genes':
+        return this.executeTypedRelatedOperation(step, ['Gene', 'Protein'], {
+          defaultRelationshipTypes: ['ASSOCIATED_WITH', 'AFFECTS', 'INTERACTS_WITH'],
+        });
+
+      case 'get-exposure-diseases':
+        return this.executeTypedRelatedOperation(step, ['Disease', 'Phenotype'], {
+          defaultRelationshipTypes: ['ASSOCIATED_WITH', 'AFFECTS', 'CAUSES'],
+        });
+
+      case 'get-exposure-processes':
+        return this.executeTypedRelatedOperation(
+          step,
+          ['Pathway', 'BiologicalProcess', 'MolecularFunction', 'CellularComponent'],
+          {
+            defaultRelationshipTypes: ['ASSOCIATED_WITH', 'AFFECTS', 'PARTICIPATES_IN', 'INVOLVED_IN'],
+          },
+        );
+
       case 'get-related-diseases':
         return this.executeRelatedOperation(step, ['Disease']);
 
@@ -81,6 +169,41 @@ export class RetrievalOperationsService {
 
       case 'retrieve-clinical-guidelines':
         return this.getRelatedEntities(String(step.params.nodeId), ['Clinical Guideline', 'Guideline'], [], Number(step.params.limit ?? 10));
+
+      case 'find-candidate-entities':
+        return this.findCandidateEntities(
+          String(step.params.query ?? ''),
+          (step.params.nodeTypes as string[] | undefined) ?? [],
+          Number(step.params.limit ?? 10),
+          'Candidate entities',
+        );
+
+      case 'find-visible-graph-matches':
+        return this.findVisibleGraphMatches(
+          String(step.params.query ?? ''),
+          (step.params.visibleNodes as Array<Record<string, unknown>> | undefined) ?? [],
+          Number(step.params.limit ?? 10),
+        );
+
+      case 'rank-entity-candidates':
+        return this.findCandidateEntities(
+          String(step.params.query ?? ''),
+          (step.params.nodeTypes as string[] | undefined) ?? [],
+          Number(step.params.limit ?? 10),
+          'Ranked entity candidates',
+        );
+
+      case 'traverse-typed-paths':
+        return (
+          (await this.traverseTypedPaths(
+          String(step.params.startId),
+          (step.params.typeSequences as string[][] | undefined) ?? [],
+          Number(step.params.limit ?? 12),
+          )) ?? {
+            items: [],
+            warnings: ['No typed path chain matched the requested traversal.'],
+          }
+        );
 
       case 'retrieve-neighborhood': {
         const nodeId = step.params.nodeId ? String(step.params.nodeId) : resolvedEntities[0]?.id;
@@ -182,6 +305,50 @@ export class RetrievalOperationsService {
       (step.params.relationshipTypes as string[] | undefined) ?? [],
       Number(step.params.limit ?? 20),
     );
+  }
+
+  private async executeTypedRelatedOperation(
+    step: RetrievalPlanStep,
+    defaultNodeTypes: string[],
+    options: {
+      defaultRelationshipTypes?: string[];
+      defaultTypeSequences?: string[][];
+    } = {},
+  ): Promise<RetrievalOperationResult> {
+    const typeSequences = Array.isArray(step.params.typeSequences)
+      ? (step.params.typeSequences as string[][])
+      : options.defaultTypeSequences;
+    const relationshipTypes =
+      ((step.params.relationshipTypes as string[] | undefined) ?? []).length > 0
+        ? ((step.params.relationshipTypes as string[] | undefined) ?? [])
+        : (options.defaultRelationshipTypes ?? []);
+    const nodeIds = Array.isArray(step.params.nodeIds)
+      ? (step.params.nodeIds as string[]).map((nodeId) => String(nodeId)).filter((nodeId) => nodeId.length > 0)
+      : [];
+    const nodeId = String(step.params.nodeId ?? nodeIds[0] ?? step.params.startId ?? '');
+    const limit = Number(step.params.limit ?? 20);
+
+    if (typeSequences && typeSequences.length > 0 && nodeId.length > 0) {
+      return (
+        (await this.traverseTypedPaths(nodeId, typeSequences, limit)) ?? {
+          items: [],
+          warnings: ['No typed path chain matched the requested traversal.'],
+        }
+      );
+    }
+
+    if (nodeIds.length > 1) {
+      return this.getRelatedEntitiesForNodeSet(
+        nodeIds,
+        defaultNodeTypes,
+        relationshipTypes,
+        String(step.params.aggregateMode ?? 'union') === 'shared' ? 'shared' : 'union',
+        Number(step.params.minSupport ?? 1),
+        limit,
+      );
+    }
+
+    return this.getRelatedEntities(nodeId, defaultNodeTypes, relationshipTypes, limit);
   }
 
   private async getNodeDetails(nodeIds: string[]) {
@@ -576,7 +743,11 @@ export class RetrievalOperationsService {
     };
   }
 
-  private async traverseTypedPaths(startId: string, typeSequences: string[][], limit: number) {
+  private async traverseTypedPaths(
+    startId: string,
+    typeSequences: string[][],
+    limit: number,
+  ): Promise<RetrievalOperationResult | null> {
     for (const sequence of typeSequences) {
       const result = await this.runTypedPathQuery(startId, sequence, limit);
       if (result.items.length > 0) {
@@ -657,6 +828,162 @@ export class RetrievalOperationsService {
       }),
       highlightNodeIds: items.length > 0 ? Array.from(new Set(items.flatMap((item) => item.nodeIds))).slice(0, 16) : [],
     };
+  }
+
+  private async findCandidateEntities(
+    query: string,
+    nodeTypes: string[],
+    limit: number,
+    title: string,
+  ): Promise<RetrievalOperationResult> {
+    const trimmedQuery = query.trim();
+    if (!trimmedQuery) {
+      return {
+        items: [],
+        warnings: ['No query text was provided for candidate entity lookup.'],
+      };
+    }
+
+    const candidates = await this.optimusKgService.resolveNodes([trimmedQuery], Math.max(1, Math.trunc(toNumber(limit))), nodeTypes);
+    const items = candidates.slice(0, Math.max(1, Math.trunc(toNumber(limit)))).map((candidate, index) => ({
+      id: `candidate-${candidate.id}-${index}`,
+      kind: 'entity' as const,
+      title: `${candidate.displayName} (${candidate.typeName})`,
+      summary: [
+        `Matched "${trimmedQuery}" against ${candidate.displayName}.`,
+        candidate.description ? `Description: ${candidate.description}` : '',
+        candidate.aliases.length > 0 ? `Aliases: ${candidate.aliases.slice(0, 6).join(', ')}.` : '',
+        candidate.matchedOn.length > 0 ? `Matched on: ${candidate.matchedOn.join(', ')}.` : '',
+      ]
+        .filter((part) => part.length > 0)
+        .join(' '),
+      score: Math.min(0.95, 0.5 + candidate.score / 220),
+      nodeIds: [candidate.id],
+      edgeIds: [],
+      metadata: compactRecord({
+        typeCode: candidate.typeCode,
+        typeName: candidate.typeName,
+        matchedOn: candidate.matchedOn,
+        rawScore: candidate.score,
+        aliases: candidate.aliases.slice(0, 10),
+        sourceIds: candidate.sourceIds.slice(0, 10),
+        sourceNames: candidate.sourceNames.slice(0, 10),
+      }),
+    }));
+
+    return {
+      items: [
+        {
+          id: `candidate-summary-${Date.now()}`,
+          kind: 'query' as const,
+          title,
+          summary:
+            items.length > 0
+              ? `Top candidates for "${trimmedQuery}": ${items
+                  .slice(0, 8)
+                  .map((item) => item.title)
+                  .join(', ')}.`
+              : `No candidate entities matched "${trimmedQuery}".`,
+          score: items.length > 0 ? 0.78 : 0.45,
+          nodeIds: items.flatMap((item) => item.nodeIds),
+          edgeIds: [],
+          metadata: {
+            query: trimmedQuery,
+            nodeTypes,
+            candidateCount: items.length,
+          },
+        },
+        ...items,
+      ],
+      highlightNodeIds: items.flatMap((item) => item.nodeIds).slice(0, 12),
+      warnings: items.length === 0 ? [`No entity candidates were found for "${trimmedQuery}".`] : [],
+    };
+  }
+
+  private async findVisibleGraphMatches(
+    query: string,
+    visibleNodes: Array<Record<string, unknown>>,
+    limit: number,
+  ): Promise<RetrievalOperationResult> {
+    const trimmedQuery = query.trim();
+    if (!trimmedQuery) {
+      return {
+        items: [],
+        warnings: ['No query text was provided for visible-graph matching.'],
+      };
+    }
+
+    const normalizedQuery = this.normalizeText(trimmedQuery);
+    const queryTokens = normalizedQuery.split(/\s+/).filter((token) => token.length > 0);
+    const matches = visibleNodes
+      .map((node) => {
+        const label = typeof node.label === 'string' ? node.label : '';
+        const nodeType = typeof node.nodeType === 'string' ? node.nodeType : 'Entity';
+        const normalizedLabel = this.normalizeText(label);
+        const score =
+          normalizedLabel === normalizedQuery
+            ? 100
+            : normalizedLabel.includes(normalizedQuery)
+              ? 80
+              : queryTokens.every((token) => normalizedLabel.includes(token))
+                ? 60
+                : 0;
+
+        return {
+          id: String(node.id ?? ''),
+          label,
+          nodeType,
+          score,
+        };
+      })
+      .filter((match) => match.id.length > 0 && match.score > 0)
+      .sort((a, b) => b.score - a.score || a.label.localeCompare(b.label))
+      .slice(0, Math.max(1, Math.trunc(toNumber(limit))));
+
+    return {
+      items: [
+        {
+          id: `visible-match-summary-${Date.now()}`,
+          kind: 'query' as const,
+          title: 'Visible graph matches',
+          summary:
+            matches.length > 0
+              ? `Visible graph matches for "${trimmedQuery}": ${matches
+                  .slice(0, 8)
+                  .map((match) => `${match.label} (${match.nodeType})`)
+                  .join(', ')}.`
+              : `No visible graph nodes matched "${trimmedQuery}".`,
+          score: matches.length > 0 ? 0.76 : 0.4,
+          nodeIds: matches.map((match) => match.id),
+          edgeIds: [],
+          metadata: {
+            query: trimmedQuery,
+            matchCount: matches.length,
+            matches,
+          },
+        },
+        ...matches.map((match, index) => ({
+          id: `visible-match-${match.id}-${index}`,
+          kind: 'entity' as const,
+          title: `${match.label} (${match.nodeType})`,
+          summary: `Matched visible graph node "${match.label}" as a ${match.nodeType}.`,
+          score: Math.min(0.92, 0.52 + match.score / 160),
+          nodeIds: [match.id],
+          edgeIds: [],
+          metadata: {
+            query: trimmedQuery,
+            matchScore: match.score,
+            nodeType: match.nodeType,
+          },
+        })),
+      ],
+      highlightNodeIds: matches.map((match) => match.id),
+      warnings: matches.length === 0 ? [`No visible graph matches were found for "${trimmedQuery}".`] : [],
+    };
+  }
+
+  private normalizeText(value: string) {
+    return value.trim().toLowerCase().replace(/\s+/g, ' ');
   }
 
   private graphToEvidence(

@@ -1,102 +1,176 @@
 # Retrieval Operations
 
-## Summary
+## Overview
+The graph agent now uses two primary execution families:
+- `graph-analysis`
+- `retrieval-operations`
 
-The graph agent uses operation-first retrieval planning. The planner emits typed operations, and `GraphRetrieverService` dispatches them to either graph analysis, retrieval operations, or guarded Cypher.
+The planner chooses between them instead of defaulting to generic neighborhood loading.
 
-## Execution Layers
+## Scope Selection
+For graph-wide operations, the planner resolves scope in this order:
+1. selected graph
+2. visible graph
+3. session graph
 
-```text
-RetrievalPlanningAgentService
-        ↓
-GraphRetrieverService
-    ├─ GraphAnalysisService
-    ├─ RetrievalOperationsService
-    └─ CypherAgentService
-```
+This scope is then passed to `GraphAnalysisService`.
 
-## Retrieval Executors
+## Graph Analysis Operations
+Owned by `GraphAnalysisService`.
 
-### graph-analysis
-
-Used when the subject is the selected graph, visible graph, or another graph-native structure.
-
-Supported operations:
-
+### Graph summary and explanation
 - `summarize-selected-nodes`
 - `summarize-visible-subgraph`
+- `interpret-subgraph`
+- `identify-graph-theme`
+- `identify-central-concepts`
+- `summarize-biological-narrative`
+
+### Schema and node-type analysis
+- `analyze-schema`
+- `analyze-node-types`
+- `find-available-node-types`
+- `find-available-relationship-types`
+- `analyze-genes`
+- `analyze-diseases`
+- `analyze-drugs`
+- `analyze-pathways`
+- `analyze-phenotypes`
+- `analyze-anatomy`
+- `analyze-molecular-functions`
+- `analyze-cellular-components`
+- `analyze-exposures`
+
+### Relationship analysis
+- `analyze-relationship-types`
+- `find-cross-type-relationships`
+- `find-dominant-relationships`
+- `rank-relationship-types`
+- `analyze-relationship-patterns`
+- `analyze-cross-type-connections`
+- `analyze-relationship-density`
+
+### Network statistics and topology
+- `compute-graph-metrics`
+- `compute-node-type-distribution`
+- `compute-relationship-distribution`
+- `compute-centrality-metrics`
+- `compute-density-metrics`
+- `compute-component-statistics`
+- `find-hub-nodes`
+- `find-bridging-nodes`
+- `analyze-cluster`
+
+### Commonality and connection analysis
 - `compare-nodes`
 - `find-shared-pathways`
 - `find-shared-diseases`
 - `find-shared-genes`
 - `find-common-neighbors`
-- `find-hub-nodes`
-- `find-bridging-nodes`
 - `explain-connections`
-- `analyze-cluster`
 
-### retrieval-operations
+### Community detection
+- `detect-communities`
+- `detect-disease-modules`
+- `detect-functional-modules`
+- `detect-gene-modules`
 
-Used for entity-centric retrieval and bounded graph traversal.
+### Enrichment
+- `enrich-diseases`
+- `enrich-pathways`
+- `enrich-phenotypes`
+- `enrich-biological-processes`
+- `enrich-molecular-functions`
+- `enrich-cellular-components`
+- `enrich-anatomy`
 
-Supported operations:
+### Ontology exploration
+- `find-parents`
+- `find-children`
+- `find-ancestors`
+- `find-descendants`
+- `find-ontology-roots`
+- `explore-ontology-hierarchy`
 
+## Retrieval Operations
+Owned by `RetrievalOperationsService`.
+
+### Core retrieval
 - `load-node-details`
+- `retrieve-relationship-evidence`
+- `find-shortest-path`
+- `traverse-typed-paths`
+- `retrieve-neighborhood`
+- `expand-network`
+
+### General typed retrieval
+- `get-related-entities`
 - `get-related-diseases`
 - `get-related-genes`
 - `get-related-proteins`
 - `get-related-pathways`
 - `get-related-drugs`
-- `get-drug-indications`
+- `find-common-neighbors`
 - `retrieve-clinical-guidelines`
-- `retrieve-relationship-evidence`
-- `find-shortest-path`
-- `retrieve-neighborhood`
-- `expand-network`
 
-### cypher-agent
+### Drug discovery
+- `get-drug-indications`
+- `get-drug-targets`
+- `get-drug-contraindications`
+- `find-off-label-uses`
+- `get-drug-mechanisms`
 
-Used only for guarded explicit Cypher execution.
+### Disease, gene, and pathway retrieval
+- `get-disease-genes`
+- `get-disease-phenotypes`
+- `get-gene-diseases`
+- `get-gene-pathways`
+- `get-pathway-genes`
+- `get-pathway-diseases`
 
-Supported operation:
+### Anatomy retrieval
+- `get-anatomy-genes`
+- `get-anatomy-diseases`
 
+### Exposure retrieval
+- `get-exposure-genes`
+- `get-exposure-diseases`
+- `get-exposure-processes`
+
+### Ambiguity support
+- `find-candidate-entities`
+- `find-visible-graph-matches`
+- `rank-entity-candidates`
+
+## Cypher
+Owned by `CypherAgentService`.
+
+### Explicit Cypher only
 - `execute-custom-cypher`
 
-## Planning Rules
+The current implementation supports guarded execution of explicit read-only Cypher. It does not use free-form generated Cypher as the normal retrieval path.
 
-### Graph-Subject Queries
+## Planner Intent Mapping
+### Graph-wide analysis families
+- `graph-summary`
+- `schema-analysis`
+- `graph-relationship-analysis`
+- `network-statistics`
+- `community-detection`
+- `ontology-analysis`
+- `enrichment-analysis`
+- `graph-explanation`
 
-If the user’s subject is the graph itself, the planner should prefer graph-analysis directly.
+### Entity-anchored families
+- `drug-search`
+- `drug-discovery`
+- `pathway-search`
+- `guideline-search`
+- `entity-search`
+- `path-search`
+- `exposure-analysis`
 
-Examples:
-
-- `Summarize the network`
-- `What biological relationships dominate this network?`
-- `Which nodes are the main hubs in this graph?`
-- `What molecular functions are present in the graph?`
-
-These should not require entity anchors if the visible graph is available.
-
-### Entity-Subject Queries
-
-If the subject is a resolved biomedical entity, the planner should use retrieval operations.
-
-Examples:
-
-- `For which diseases is Metformin indicated?`
-- `Which genes are associated with Alzheimer disease?`
-- `How is APOE related to amyloid beta?`
-
-### Mixed Queries
-
-If the query combines graph context with explicit entity mentions, the planner can mix graph analysis and entity-centric retrieval.
-
-Example:
-
-- `How do these selected genes relate to Parkinson disease?`
-
-## Current Constraints
-
-- planning is heuristic but typed
-- visible-graph analysis depends on the frontend sending full visible graph context
-- graph-analysis relies on the node and edge metadata available in serialized graph payloads
+## Fallback Policy
+- Use a typed graph-analysis operation when the subject is the selected graph, visible graph, or session graph.
+- Use typed retrieval when the subject is a resolved entity or resolved set of entities.
+- Use neighborhood loading only when no more specific operation is appropriate.

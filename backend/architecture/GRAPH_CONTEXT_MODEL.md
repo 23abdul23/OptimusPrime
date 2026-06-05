@@ -1,126 +1,98 @@
 # Graph Context Model
 
 ## Purpose
+Graph context tells the backend what part of the graph the user is talking about before any retrieval happens.
 
-Graph context is a first-class input to the graph agent. It is independent from entity extraction and entity resolution.
+## Context Sources
+### Selected graph
+Comes from:
+- single-click node selection
+- single-click edge selection
+- ctrl/meta multi-select
+- box selection
+- lasso selection
 
-The user can express intent through the rendered graph itself, not only through text. Because of that, the backend must reason over:
+Payload fields:
+- `selectedNodeContext`
+- `selectedEdgeContext`
+- `networkContext.selectedNodeIds`
+- `networkContext.selectedEdgeIds`
 
-- selected nodes
-- selected edges
-- visible graph
-- remembered session graph
+Rule:
+- selected nodes and edges are the primary subject whenever the query refers to `these nodes`, `selected nodes`, `these edges`, `them`, or similar graph references
 
-without reconstructing those inputs indirectly from natural language.
+### Visible graph
+Comes from the currently rendered network.
 
-## Core Principle
+Payload fields:
+- `networkContext.totalNodes`
+- `networkContext.totalEdges`
+- `networkContext.visibleNodeIds`
+- `networkContext.visibleEdgeIds`
+- `networkContext.visibleNodeContext`
+- `networkContext.topNodeTypes`
 
-Graph context priority is:
+Rule:
+- if nothing is selected, the visible graph becomes the active graph subject for graph-wide analysis queries
 
-```text
-Selected Nodes / Edges
-        ↓
-Visible Graph
-        ↓
-Session Graph
-```
+### Session graph
+Comes from Redis conversation state.
 
-## Current Request Shape
+Stored fields:
+- `selectedNodeIds`
+- `selectedEdgeIds`
+- `visibleNodeIds`
+- `visibleEdgeIds`
+- `activeEntities`
+- `resolvedNodeIds`
+- `frontierNodeIds`
 
-The frontend sends:
+Rule:
+- session graph is the fallback only when neither selected graph nor visible graph is available
 
-```ts
-{
-  selectedNodeContext: Array<{
-    id: string;
-    label: string;
-    nodeType?: string;
-  }>;
-  selectedEdgeContext: Array<{
-    id: string;
-    source: string;
-    target: string;
-    relation?: string;
-  }>;
-  networkContext?: {
-    totalNodes: number;
-    totalEdges: number;
-    selectedNodeIds?: string[];
-    selectedEdgeIds?: string[];
-    visibleNodeIds?: string[];
-    visibleEdgeIds?: string[];
-    visibleNodeContext?: Array<{
-      id: string;
-      label: string;
-      nodeType?: string;
-    }>;
-    topNodeTypes?: Array<{
-      type: string;
-      count: number;
-    }>;
-  };
-}
-```
+## Graph Scope Modes
+### `selection`
+Used when the request is anchored to selected nodes or edges.
 
-## Backend Graph Context Result
+### `visible-subgraph`
+Used when the user refers to the graph/network and no stronger selection anchor exists.
 
-`GraphContextAgentService` produces:
+### `session`
+Used when the user refers to prior graph context and current frontend graph context is absent.
 
-```ts
-{
-  activeAnchors: GraphSelectionNodeContext[];
-  selectedNodes: GraphSelectionNodeContext[];
-  selectedEdges: GraphSelectionEdgeContext[];
-  visibleNodes: GraphSelectionNodeContext[];
-  visibleNodeIds: string[];
-  visibleEdgeIds: string[];
-  graphScope: {
-    mode: "selection" | "visible-subgraph" | "session" | "none";
-    selectedNodeCount: number;
-    selectedEdgeCount: number;
-    visibleNodeCount: number;
-    visibleEdgeCount: number;
-  };
-  graphReferences: {
-    referencesSelection: boolean;
-    referencesNodes: boolean;
-    referencesEdges: boolean;
-    referencesVisibleGraph: boolean;
-    referencesSessionGraph: boolean;
-  };
-  selectedNodeTypes: string[];
-  selectedEdgeTypes: string[];
-}
-```
+### `none`
+Used when no graph context is available.
 
-## Required Behaviors
+## Graph Context Agent Output
+`GraphContextAgentService` returns:
+- `activeAnchors`
+- `selectedNodes`
+- `selectedEdges`
+- `visibleNodes`
+- `visibleNodeIds`
+- `visibleEdgeIds`
+- `graphScope`
+- `graphReferences`
+- `selectedNodeTypes`
+- `selectedEdgeTypes`
 
-### Selection-Specific
+## Planner Rules
+- Selected graph takes priority over visible graph.
+- Visible graph takes priority over session graph.
+- Graph-wide analysis uses graph ids directly; it does not require explicit anchor entity resolution.
+- Entity queries may still use graph context for disambiguation and ranking.
+- Mixed queries combine selected or visible graph context with resolved explicit entities.
 
-- single selected node should become an active anchor
-- selected edges should contribute both relation context and endpoint context
-- multi-select should remain intact across the request lifecycle
-- selected graph queries should not require entity resolution
+## Ambiguity Rules
+- If explicit mention matching is ambiguous inside the visible graph, visible-graph matches are preferred before global OptimusKG resolution.
+- If a graph-subject query has enough selected or visible graph context, the system should not manufacture entity mentions from verbs such as `summarize`, `compare`, or `describe`.
 
-### Visible-Graph-Specific
-
-- if the user asks about `the graph`, `the network`, `this subgraph`, or similar graph-wide context and nothing is selected, the visible graph becomes the active subject
-- the backend should be able to summarize the visible graph directly
-- graph-wide analysis should use full visible graph ids and visible node metadata, not a tiny sample
-
-### Session-Specific
-
-- if neither selection nor visible graph provides the subject, the session graph is the last fallback
-
-## Why This Matters
-
-Without a strong graph-context model, the system makes wrong assumptions such as:
-
-- trying to resolve imperative verbs as biomedical entities
-- claiming no anchor entity exists when the visible graph itself is the subject
-- ignoring selected edges and relationship structure
-- failing graph-wide analysis queries when no nodes are explicitly selected
-
-## Current Design Direction
-
-The current implementation treats graph context as a planner input, an evidence-ranking input, and a reasoning input. It is not just a UI convenience payload.
+## Current Frontend Contract
+For correct graph-aware planning, the frontend is expected to send:
+- `selectedNodeContext`
+- `selectedEdgeContext`
+- `networkContext.selectedNodeIds`
+- `networkContext.selectedEdgeIds`
+- `networkContext.visibleNodeIds`
+- `networkContext.visibleEdgeIds`
+- `networkContext.visibleNodeContext`

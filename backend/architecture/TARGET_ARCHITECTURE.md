@@ -1,86 +1,62 @@
 # Target Architecture
 
-## Purpose
+## Direction
+Keep the current single NestJS orchestrator, but continue to strengthen the specialized-service boundaries. The target is not a loose autonomous swarm. The target is a horizontally specialized, typed graph-agent architecture inside one service boundary.
 
-This file describes the intended steady-state architecture for the current graph agent. It is not a speculative redesign from scratch. It is the target shape that the current implementation is already moving toward and largely reflects the implemented service boundaries.
+## What Is Already In Place
+- router-gated extraction and resolution
+- graph-context-first planning
+- dedicated graph analysis executor
+- dedicated typed retrieval executor
+- guarded Cypher boundary
+- evidence assessment
+- bounded replanning
+- grounded reasoning
+- Redis-backed session graph memory
 
-## Target Shape
+## Near-Term Target
+### Stronger graph analytics
+- statistical enrichment rather than support-only enrichment
+- GDS-backed community detection where available
+- better centrality and module scoring
 
-```text
-Frontend Graph UI + KG Chat
-        ↓
-Graph-Agent API
-        ↓
-GraphAgentService (orchestrator)
-        ↓
-Query Router
-        ↓
-Graph Context Agent
-        ↓
-Intent Agent
-        ↓
-Optional Mention Extraction
-        ↓
-Optional Entity Resolution
-        ↓
-Retrieval Planning Agent
-        ↓
-Execution Coordinator
-    ├─ Graph Analysis Layer
-    ├─ Retrieval Operations Layer
-    └─ Guarded Cypher Layer
-        ↓
-Evidence Agent
-        ↓
-Replanning Loop
-        ↓
-Reasoning Agent
-        ↓
-Streamed Answer + Graph Actions + Graph State
-```
+### Better ambiguity handling
+- explicit clarification plans as first-class planner outputs
+- richer visible-graph matching and grouped answers for ambiguous labels
 
-## Target Properties
+### Stronger retrieval planning
+- more explicit executor scoring before the plan is emitted
+- richer operation composition for multi-step graph-wide questions
+- better planner verification against actual graph scope
 
-### 1. Graph-First Reasoning
+### Better evidence grounding
+- provenance-aware scoring across more tool families
+- stronger partial-evidence messaging
+- evaluation suites for graph-summary, ontology, enrichment, and drug-discovery flows
 
-- the graph, not the LLM, is the primary substrate for biomedical reasoning
-- visible graph context is a valid subject even without explicit selected nodes
+### Multi-source support
+- keep OptimusKG as the current source of truth
+- evolve the retrieval and graph-analysis layers so other KGs can be added behind the same contracts
 
-### 2. Conditional Entity Work
+## Architecture Shape
+### Keep
+- one orchestrator
+- specialized services
+- typed plan steps
+- bounded replanning
 
-- extraction should run only when needed
-- resolution should run only when needed
-- graph-subject queries should not be forced through entity resolution
+### Avoid
+- free-form multi-agent debate loops
+- planner-generated Cypher as the default path
+- LLM-only entity existence checks
 
-### 3. Operation-First Planning
+## Desired End State
+The graph agent should answer most KG questions through:
+1. graph context resolution
+2. typed intent classification
+3. typed operation planning
+4. graph-native execution
+5. explicit evidence assessment
+6. grounded response synthesis
 
-- the planner should emit typed operations
-- execution should be delegated to the correct layer
-
-### 4. Schema-Aware Graph Analysis
-
-- graph analysis should work across all node types present in the graph
-- summaries should use topology, node-type distribution, relationship distribution, and node metadata
-
-### 5. Structured Outputs
-
-The backend should stream:
-
-- answer text
-- graph evidence bundle
-- graph actions
-- updated graph state
-
-### 6. Stateful Follow-Up Handling
-
-- session graph state should support follow-up questions
-- current selection and visible graph should still outrank older session memory
-
-## Near-Term Direction
-
-The remaining architectural work should continue to strengthen:
-
-- visible-graph-native analysis
-- schema-aware summaries across all ontology categories
-- explicit graph-wide analytic intents
-- planner coverage for graph-wide follow-up questions
+The visible graph and selected graph should remain first-class subjects throughout that flow.
