@@ -9,7 +9,7 @@ export class AppController {
 
   @Get()
   getHello(): string {
-    return 'Welcome to the TBEP API!';
+    return 'Welcome to the OPTIMUS API!';
   }
 
   @Get('count-nodes')

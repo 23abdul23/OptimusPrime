@@ -7,6 +7,7 @@ import { ConfigService } from '@nestjs/config';
 import cookieParser from 'cookie-parser';
 import { initializeLangfuseTracing } from './instrumentation';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import { Request, Response } from 'express';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
@@ -38,14 +39,7 @@ async function bootstrap() {
   app.useBodyParser('json', { limit: '1mb' });
   app.useBodyParser('urlencoded', { limit: '1mb', extended: true });
   app.use(cookieParser());
-  app.getHttpAdapter().get('/health', (_req, res) => {
-	  res.status(200).json({
-	    status: 'ok',
-	    service: 'OPTIMUS',
-	    message: 'OPTIMUS Running',
-	    timestamp: new Date().toISOString(),
-	  });
-	});
+  
   await app.listen(configService.get('PORT', 4000));
 }
 
