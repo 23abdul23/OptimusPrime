@@ -38,6 +38,14 @@ async function bootstrap() {
   app.useBodyParser('json', { limit: '1mb' });
   app.useBodyParser('urlencoded', { limit: '1mb', extended: true });
   app.use(cookieParser());
+  app.getHttpAdapter().get('/health', (_req, res) => {
+	  res.status(200).json({
+	    status: 'ok',
+	    service: 'OPTIMUS',
+	    message: 'OPTIMUS Running',
+	    timestamp: new Date().toISOString(),
+	  });
+	});
   await app.listen(configService.get('PORT', 4000));
 }
 
