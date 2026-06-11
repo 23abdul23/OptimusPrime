@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { PendingClarificationState, ResolvedEntity } from './graph-agent.types';
 import { GraphAgentLlmService } from './graph-agent-llm.service';
 import type { ModelId } from '@/llm/model.constants';
+import { GRAPH_AGENT_CLARIFICATION_SELECTION_SYSTEM_PROMPT } from '@/llm/system-prompts';
 
 const CLARIFICATION_SELECTION_SCHEMA = z.object({
   mode: z.enum(['none', 'all', 'indices']),
@@ -29,12 +30,7 @@ export class ClarificationAgentService {
       functionId: 'graph-agent-clarification-selection',
       temperature: 0,
       maxOutputTokens: 250,
-      system: [
-        'You interpret short clarification replies for a graph agent.',
-        'Choose from the numbered candidate list only.',
-        'Map replies like "all of them", "the first one", "yes", or candidate names to explicit candidate indices.',
-        'If the reply does not clearly select a candidate, return mode=none.',
-      ].join(' '),
+      system: GRAPH_AGENT_CLARIFICATION_SELECTION_SYSTEM_PROMPT,
       prompt: [
         `Original query: ${params.pendingClarification.originalQuery}`,
         `Unresolved mention: ${params.pendingClarification.unresolvedEntity}`,

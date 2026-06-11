@@ -434,7 +434,6 @@ function GraphAwareText({
               if (!sigmaInstance) return;
               useKGStore.getState().setGraphSelection({ nodeIds: [part.candidate.id], edgeIds: [] });
               useKGStore.getState().setInspectedNodeId(part.candidate.id);
-              focusOptimusNodes(sigmaInstance, [part.candidate.id]);
             }}
           >
             {part.candidate.label}
@@ -1121,6 +1120,7 @@ export function KGChat({ onChatOpen, children }: KGChatProps) {
                 action.graph,
                 action.mode,
                 action.highlightNodeIds ?? [],
+                action.focusMode ?? 'highlighted',
               );
               if ((action.highlightNodeIds ?? []).length > 0) {
                 setGraphSelection({

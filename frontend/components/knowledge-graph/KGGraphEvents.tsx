@@ -103,6 +103,7 @@ export function KGGraphEvents({
   const dragHappenedRef = useRef(false);
   const deferredSelectionFrameRef = useRef<number | null>(null);
   const nodeSearchQuery = useKGStore(state => state.nodeSearchQuery);
+  const skipNextNodeSearchNavigation = useKGStore(state => state.skipNextNodeSearchNavigation);
   const activePropertyNodeTypes = useKGStore(state => state.activePropertyNodeTypes);
   const highlightNeighborNodes = useKGStore(state => state.highlightNeighborNodes);
   const nodeNameToIdTrie = useKGStore(state => state.nodeNameToIdTrie);
@@ -263,13 +264,16 @@ export function KGGraphEvents({
     }
 
     // Navigate to the last successfully highlighted node
-    if (lastValidNode) {
+    if (lastValidNode && nodeIds.size === 1 && !skipNextNodeSearchNavigation) {
       gotoNode(lastValidNode, { duration: 100 });
     }
     highlightedNodesRef.current = nodeIds;
+    if (skipNextNodeSearchNavigation) {
+      useKGStore.setState({ skipNextNodeSearchNavigation: false });
+    }
     // Force sigma refresh to update nodeReducer with new highlighted nodes
     sigma.refresh();
-  }, [nodeSearchQuery, sigma]);
+  }, [gotoNode, nodeSearchQuery, sigma, skipNextNodeSearchNavigation]);
 
   useEffect(() => {
     const graph = sigma.getGraph();

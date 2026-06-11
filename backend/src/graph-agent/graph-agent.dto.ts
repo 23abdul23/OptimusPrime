@@ -56,3 +56,19 @@ export const GraphAgentChatRequestSchema = z.object({
 });
 
 export class GraphAgentChatRequestDto extends createZodDto(GraphAgentChatRequestSchema) {}
+
+export const ExploreAnswerNetworkPrepareSchema = z.object({
+  model: z.enum(MODEL_ID_LIST).optional(),
+  sessionId: z.string().min(1).optional(),
+  query: z.string().min(1),
+  answer: z.string().min(1),
+});
+
+export class ExploreAnswerNetworkPrepareDto extends createZodDto(ExploreAnswerNetworkPrepareSchema) {}
+
+export const ExploreAnswerNetworkBuildSchema = z.object({
+  sessionId: z.string().min(1).optional(),
+  preparationId: z.string().min(1),
+});
+
+export class ExploreAnswerNetworkBuildDto extends createZodDto(ExploreAnswerNetworkBuildSchema) {}

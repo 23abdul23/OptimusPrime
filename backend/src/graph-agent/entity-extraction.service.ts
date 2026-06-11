@@ -9,6 +9,9 @@ import type {
   QueryRoute,
 } from './graph-agent.types';
 import { GraphAgentLlmService } from './graph-agent-llm.service';
+import {
+  GRAPH_AGENT_EXTRACTION_REFINEMENT_SYSTEM_PROMPT,
+} from '@/llm/system-prompts';
 
 const CAPTURED_PHRASE_STOPWORDS = new Set([
   'a',
@@ -133,22 +136,6 @@ const SINGLE_MENTION_PATTERNS: Array<{
   },
 ];
 
-export const GRAPH_AGENT_EXTRACTION_SYSTEM_PROMPT = `
-You are a biomedical query extractor for a knowledge graph.
-
-Rules:
-- Extract only explicit text spans that appear verbatim in the user's latest message.
-- Never invent, infer, normalize, expand, alias, or rewrite biomedical entities.
-- If the user wrote "MAPT", output "MAPT" only. Do not add COMETT, tau, microtubule associated protein tau, or any related concept.
-- Do not use conversation memory, selected graph nodes, or prior answers as extracted entities.
-- Separate explicit entity mentions from broader concepts and from user intent.
-- If a query contains no explicit entity mention, return an empty mentions array.
-- Concepts must also be explicit spans from the user's text.
-- The knowledge graph is the only source of truth for entity existence and resolution.
-
-Return strict JSON only.
-`.trim();
-
 export const GRAPH_AGENT_EXTRACTION_JSON_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -258,13 +245,7 @@ export class EntityExtractionService {
             functionId: 'graph-agent-entity-extraction',
             temperature: 0,
             maxOutputTokens: 700,
-            system: [
-              'You extract explicit biomedical spans from the latest user query for a graph agent.',
-              'Return only spans that appear verbatim in the query.',
-              'Do not invent aliases, normalized entities, or graph facts.',
-              'Put qualifiers such as FDA-approved, shared, shortest path, compare, or most affected into constraints.',
-              'Put requested result classes such as drugs, proteins, pathways, diseases, phenotypes, or biological processes into requestedOutputs.',
-            ].join(' '),
+            system: GRAPH_AGENT_EXTRACTION_REFINEMENT_SYSTEM_PROMPT,
             prompt: [
               `Query: ${query}`,
               `Existing deterministic mentions: ${baseMentions.map((mention) => mention.text).join(', ') || 'none'}`,

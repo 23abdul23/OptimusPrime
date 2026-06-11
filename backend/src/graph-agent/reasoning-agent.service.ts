@@ -7,6 +7,7 @@ import {
 } from 'ai';
 import { createOpenAICompatible, type OpenAICompatibleProvider } from '@ai-sdk/openai-compatible';
 import { DEFAULT_MODEL, type ModelId } from '@/llm/model.constants';
+import { GRAPH_AGENT_REASONING_SYSTEM_PROMPT } from '@/llm/system-prompts';
 import type {
   GraphAction,
   GraphContextResult,
@@ -49,20 +50,7 @@ export class ReasoningAgentService {
 
     return streamText({
       model: this.modelRegistry.languageModel(params.model || DEFAULT_MODEL),
-      system: [
-        'You are the Optimus Explorer reasoning agent.',
-        'Use only the provided graph evidence as the source of truth.',
-        'Do not invent biomedical facts, entities, mechanisms, or relationships.',
-        'Prefer direct relations over shortest paths, and shortest paths over weak neighborhood summaries.',
-        'For graph-summary operations, explain the selected graph rather than enumerating node labels.',
-        'For graph-summary operations, organize the answer as: Graph Overview, Key Entities, Graph Structure, Major Relationship Types, Central Nodes, Biological Interpretation.',
-        'Use graph topology, relationship types, node metadata, and ontology typing diagnostics when they are present in the evidence.',
-        'Use the evidence assessment to calibrate certainty.',
-        'If confidence is medium or low, say that explicitly.',
-        'If the evidence is insufficient, say so explicitly instead of filling gaps.',
-        'Use provenance highlights and relationship metadata when available.',
-        'Keep the answer concise, grounded, and specific to the user question.',
-      ].join(' '),
+      system: GRAPH_AGENT_REASONING_SYSTEM_PROMPT,
       messages: [
         {
           role: 'user',

@@ -4,12 +4,20 @@ import { observe, updateActiveTrace } from '@langfuse/tracing';
 import { pipeUIMessageStreamToResponse } from 'ai';
 import { DEFAULT_MODEL } from '@/llm/model.constants';
 import { ThrottlerBehindProxyGuard } from '@/llm/llm-throttle.guard';
-import { GraphAgentChatRequestDto } from './graph-agent.dto';
+import {
+  ExploreAnswerNetworkBuildDto,
+  ExploreAnswerNetworkPrepareDto,
+  GraphAgentChatRequestDto,
+} from './graph-agent.dto';
+import { ExploreAnswerNetworkService } from './explore-answer-network.service';
 import { GraphAgentService } from './graph-agent.service';
 
 @Controller('graph-agent')
 export class GraphAgentController {
-  constructor(private readonly graphAgentService: GraphAgentService) {}
+  constructor(
+    private readonly graphAgentService: GraphAgentService,
+    private readonly exploreAnswerNetworkService: ExploreAnswerNetworkService,
+  ) {}
 
   @Post('chat')
   @UseGuards(ThrottlerBehindProxyGuard)
@@ -46,5 +54,17 @@ export class GraphAgentController {
         endOnExit: false,
       },
     )();
+  }
+
+  @Post('explore/prepare-network')
+  @UseGuards(ThrottlerBehindProxyGuard)
+  async prepareExploreNetwork(@Body() dto: ExploreAnswerNetworkPrepareDto) {
+    return this.exploreAnswerNetworkService.prepare(dto);
+  }
+
+  @Post('explore/build-network')
+  @UseGuards(ThrottlerBehindProxyGuard)
+  async buildExploreNetwork(@Body() dto: ExploreAnswerNetworkBuildDto) {
+    return this.exploreAnswerNetworkService.build(dto);
   }
 }

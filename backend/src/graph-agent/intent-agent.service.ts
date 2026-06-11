@@ -9,6 +9,7 @@ import type {
   QueryRoute,
 } from './graph-agent.types';
 import { GraphAgentLlmService } from './graph-agent-llm.service';
+import { GRAPH_AGENT_INTENT_CLASSIFICATION_SYSTEM_PROMPT } from '@/llm/system-prompts';
 
 const HYBRID_INTENT_PRIMARY_VALUES = [
   'graph-discovery',
@@ -124,12 +125,7 @@ export class IntentAgentService {
       functionId: 'graph-agent-intent-classification',
       temperature: 0,
       maxOutputTokens: 450,
-      system: [
-        'You classify biomedical graph questions for a typed graph agent.',
-        'Choose the single best primary intent and operation from the allowed enum values.',
-        'Prefer drug-discovery for therapeutic questions, path-search for mechanistic multi-hop connection questions, and enrichment-analysis for shared functional questions.',
-        'Do not invent graph facts or entities.',
-      ].join(' '),
+      system: GRAPH_AGENT_INTENT_CLASSIFICATION_SYSTEM_PROMPT,
       prompt: [
         `Query: ${params.query}`,
         `Deterministic guess: primary=${deterministic.primary}, operation=${deterministic.operation}`,

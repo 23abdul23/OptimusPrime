@@ -553,6 +553,7 @@ export type GraphAction =
       mode: 'replace' | 'merge';
       graph: SerializedGraphPayload;
       highlightNodeIds?: string[];
+      focusMode?: 'highlighted' | 'fit-viewport';
     }
   | {
       id: string;

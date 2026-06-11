@@ -1,9 +1,8 @@
 'use client';
 
 import { Suspense } from 'react';
-import AnimatedNetworkBackground from '@/components/AnimatedNetworkBackground';
 import { ExploreKGChat } from '@/components/chat/ExploreKGChat';
-import { KnowledgeGraphTab } from '@/components/explore';
+import { KnowledgeGraphTab } from '@/components/explore/KnowledgeGraphTab';
 import { databaseStats } from '@/lib/data';
 
 function ExploreContent() {
@@ -11,9 +10,7 @@ function ExploreContent() {
     <div className='relative mx-auto min-h-[30vh] max-w-7xl'>
       <div className='mx-auto h-full min-h-[30vh] p-2 sm:p-6'>
         <div className='relative'>
-          <h1 className='text-center font-bold text-3xl sm:text-4xl'>
-            Welcome to Optimus Prime
-          </h1>
+          <h1 className='text-center font-bold text-3xl sm:text-4xl'>Welcome to Optimus Prime</h1>
 
           <p className='mt-3 text-center text-base text-50 sm:text-lg'>
             Knowledge Graph explorer and visualization tool
@@ -22,9 +19,7 @@ function ExploreContent() {
           <div className='mx-auto mt-10 grid max-w-5xl grid-cols-1 gap-4 lg:grid-cols-6'>
             {databaseStats.map((item) => (
               <div key={item.label} className='text-center'>
-                <div className='font-bold text-2xl sm:text-3xl'>
-                  {item.count}
-                </div>
+                <div className='font-bold text-2xl sm:text-3xl'>{item.count}</div>
                 <div className='text-sm opacity-90'>{item.label}</div>
               </div>
             ))}
@@ -33,19 +28,14 @@ function ExploreContent() {
       </div>
 
       <KnowledgeGraphTab />
-
       <ExploreKGChat />
     </div>
   );
 }
 
-export default function Explore() {
+export default function ExplorePage() {
   return (
-    <Suspense
-      fallback={
-        <div className='relative mx-auto min-h-[60vh] max-w-7xl' />
-      }
-    >
+    <Suspense fallback={<div className='relative mx-auto min-h-[60vh] max-w-7xl' />}>
       <ExploreContent />
     </Suspense>
   );

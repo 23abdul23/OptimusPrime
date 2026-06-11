@@ -367,12 +367,14 @@ async function finalizeGraph(
   sigma: Sigma<NodeAttributes, EdgeAttributes>,
   graph: Graph<NodeAttributes, EdgeAttributes>,
   highlightNodeIds: string[] = [],
+  focusMode: 'highlighted' | 'fit-viewport' = 'highlighted',
 ) {
   ensureVisibleNodePositions(graph);
   await applyKnowledgeGraphStyling(graph);
   const statistics = kgStatisticsGenerator(graph);
 
   useKGStore.setState({
+    skipNextNodeSearchNavigation: focusMode === 'fit-viewport' && highlightNodeIds.length > 0,
     statisticsComputed: true,
     nodeSearchQuery: highlightNodeIds.join(', '),
     networkStatistics: {
@@ -384,7 +386,7 @@ async function finalizeGraph(
   });
 
   sigma.refresh();
-  if (highlightNodeIds.length > 0) {
+  if (focusMode === 'highlighted' && highlightNodeIds.length > 0) {
     focusCameraOnNodes(sigma, graph, highlightNodeIds);
   } else {
     resetOptimusViewport(sigma);
@@ -476,6 +478,7 @@ export async function applyOptimusGraph(
   payload: SerializedGraphPayload,
   mode: 'replace' | 'merge',
   highlightNodeIds: string[] = [],
+  focusMode: 'highlighted' | 'fit-viewport' = 'highlighted',
 ) {
   const graph = sigma.getGraph();
   clearPathHighlight(graph);
@@ -500,7 +503,7 @@ export async function applyOptimusGraph(
     mergeEdge(graph, edge.key, edge.source, edge.target, edge.attributes, edge.undirected);
   }
 
-  await finalizeGraph(sigma, graph, highlightNodeIds);
+  await finalizeGraph(sigma, graph, highlightNodeIds, focusMode);
 }
 
 export function highlightOptimusPath(

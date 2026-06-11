@@ -7,6 +7,7 @@ import type {
 } from './graph-agent.types';
 import { GraphAgentLlmService } from './graph-agent-llm.service';
 import type { ModelId } from '@/llm/model.constants';
+import { GRAPH_AGENT_QUERY_DECOMPOSITION_SYSTEM_PROMPT } from '@/llm/system-prompts';
 
 const QUERY_DECOMPOSITION_SCHEMA = z.object({
   summary: z.string().trim().min(1).max(280),
@@ -37,15 +38,7 @@ export class QueryDecompositionAgentService {
       functionId: 'graph-agent-query-decomposition',
       temperature: 0,
       maxOutputTokens: 700,
-      system: [
-        'You decompose biomedical graph questions into structured graph workflows.',
-        'Use the query text as the only source of semantic intent.',
-        'Do not invent graph facts or entity existence.',
-        'Return high-level workflow steps only, not Cypher.',
-        'Keep tasks executable by a deterministic graph retrieval planner.',
-        'Constraints should capture qualifiers such as approved, shared, shortest-path, compare, ranked, or visible-graph scope.',
-        'Outputs should be concrete result classes such as drugs, proteins, pathways, diseases, phenotypes, biological processes, or exposures.',
-      ].join(' '),
+      system: GRAPH_AGENT_QUERY_DECOMPOSITION_SYSTEM_PROMPT,
       prompt: [
         `Query: ${params.query}`,
         `Route category: ${params.queryRoute.category}`,

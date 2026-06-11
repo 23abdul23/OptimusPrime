@@ -25,6 +25,7 @@ import { ReasoningAgentService } from './reasoning-agent.service';
 import { ReplanningAgentService } from './replanning-agent.service';
 import { RetrievalOperationsService } from './retrieval-operations.service';
 import { RetrievalPlanningAgentService } from './retrieval-planning-agent.service';
+import { ExploreAnswerNetworkService } from './explore-answer-network.service';
 
 @Module({
   imports: [
@@ -78,6 +79,7 @@ import { RetrievalPlanningAgentService } from './retrieval-planning-agent.servic
     ReplanningAgentService,
     ReasoningAgentService,
     GraphAgentService,
+    ExploreAnswerNetworkService,
   ],
 })
 export class GraphAgentModule {}

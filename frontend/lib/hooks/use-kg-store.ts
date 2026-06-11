@@ -38,6 +38,10 @@ export interface KGStore {
    */
   nodeSearchQuery: string;
   /**
+   * Skip one automatic camera jump when highlights are applied programmatically
+   */
+  skipNextNodeSearchNavigation: boolean;
+  /**
    * Sigma instance reference for direct graph access
    */
   sigmaInstance: Sigma<NodeAttributes, EdgeAttributes> | null;
@@ -230,6 +234,7 @@ export interface KGStore {
 export const useKGStore = create<KGStore>(set => ({
   nodeSuggestions: [],
   nodeSearchQuery: '',
+  skipNextNodeSearchNavigation: false,
   // Sigma instance
   sigmaInstance: null,
 

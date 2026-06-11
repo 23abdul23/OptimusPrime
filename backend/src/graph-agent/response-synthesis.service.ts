@@ -7,6 +7,7 @@ import {
 } from 'ai';
 import { createOpenAICompatible, type OpenAICompatibleProvider } from '@ai-sdk/openai-compatible';
 import { DEFAULT_MODEL, type ModelId } from '@/llm/model.constants';
+import { GRAPH_AGENT_RESPONSE_SYNTHESIS_SYSTEM_PROMPT } from '@/llm/system-prompts';
 import type { GraphEvidenceBundle, ResolvedEntity } from './graph-agent.types';
 
 @Injectable()
@@ -40,19 +41,7 @@ export class ResponseSynthesisService {
 
     return streamText({
       model: this.modelRegistry.languageModel(params.model || DEFAULT_MODEL),
-      system: [
-        'You are the Optimus Explorer graph reasoning agent.',
-        'Use only the provided graph evidence as the source of truth.',
-        'Do not invent biomedical facts, entities, mechanisms, or relationships.',
-        'Prioritize direct relations over shared neighbors, and shared neighbors over generic path evidence.',
-        'Use node metadata and relationship provenance when available.',
-        'If a mention could not be resolved or the evidence is weak, say that explicitly.',
-        'Do not claim causality or mechanism unless it is directly supported by the retrieved evidence.',
-        'If the evidence is insufficient, say so explicitly.',
-        'Do not recite long exploratory node chains from a generic neighborhood unless they directly answer the question.',
-        'Prefer concise, evidence-backed explanations that name the resolved entities, the strongest relation or path evidence, and the key provenance.',
-        'Keep the answer concise, factual, and grounded in the retrieved entities, relations, and paths.',
-      ].join(' '),
+      system: GRAPH_AGENT_RESPONSE_SYNTHESIS_SYSTEM_PROMPT,
       messages: [
         {
           role: 'user',

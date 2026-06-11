@@ -14,10 +14,12 @@ export default function NotFound() {
           alt='404'
           width={500}
           height={500}
-          className='h-auto w-[min(500px,90vw)]'
+          priority
+          sizes='(max-width: 640px) 90vw, 500px'
+          style={{ width: 'min(500px, 90vw)', height: 'auto' }}
         />
-        <Link href='/' className={buttonVariants({ variant: 'default', className: '' })}>
-          Back to home
+        <Link href='/explore' className={buttonVariants({ variant: 'default', className: '' })}>
+          Back to Explore
         </Link>
       </div>
       <Footer />

@@ -13,6 +13,10 @@ import { z } from 'zod';
 import { PromptDto, DEFAULT_MODEL } from '@/llm/model.constants';
 import { createOpenAICompatible, OpenAICompatibleProvider } from '@ai-sdk/openai-compatible';
 import { tavily } from '@tavily/core';
+import {
+  buildKnowledgeGraphChatSystemPrompt,
+  GENERAL_BIOMEDICAL_CHAT_SYSTEM_PROMPT,
+} from '@/llm/system-prompts';
 
 @Injectable()
 export class LlmService {
@@ -40,79 +44,13 @@ export class LlmService {
     });
   }
 
-  //   private readonly SYSTEM_PROMPT = `Answer the following biomedical question in a very specific manner:
-  // 	1. Content Requirements:
-  // 	- Provide only the names of the genes, pathways, or gene-protein interactions when the question specifically asks for them.
-  // 	- Do not include any extra explanations or additional information unless explicitly requested in the query.
-  // 	- Highlight only the main keywords, genes, pathways, or their interactions when asked.
-  // 	2. Citation and Web Scraping Requirements:
-  // 	- Scrape the internet for accurate and precise answers along with their corresponding citations. Ensure live web scraping is used for improved accuracy and precision.
-  // 	- If no citations are found, respond with exactly:
-  //   Not able to scrape citations for this question.
-  //   Do not fabricate or hallucinate any citations or dummy links.
-  // 	3. Citation Format (for each citation):
-  // The output for each citation must be in the following exact format:
-
-  // Title of the paper
-  // Authors
-  // Journal
-  // [Link](https://www.google.com/search?q={URL_ENCODED_TITLE_OF_THE_PAPER}&btnI=I%27m%20Feeling%20Lucky)
-
-  // 	- Title of the paper: Provide the title exactly as it appears.
-  // 	- Authors: List the authors of the paper.
-  // 	- Journal: List the journal where the paper was published.
-  // 	- Modified Link: The link should be in Markdown format. Instead of using direct URLs, construct the link using the paper title. Ensure that {URL_ENCODED_TITLE_OF_THE_PAPER} is the URL-encoded version of the paper's title.
-
-  // 	4. Additional Notes:
-  // 	- Do not include any PMIDs, DOIs, or extra identifiers in the citation.
-  // 	- Strictly adhere to this format for all citations to support your answer.
-  // 	- Ensure that the answer is as precise and accurate as possible by using the latest available data from live web scraping.
-
-  // Please strictly follow these guidelines in your responses.`;
-
-  private readonly SYSTEM_PROMPT = `Answer the following biomedical question in a very specific manner:
-	1. Content Requirements:
-	- Provide only the names of the genes, pathways, or gene-protein interactions when the question specifically asks for them.
-	- Include small explanations only unless explicitly requested in the query.
-	- Highlight only the main keywords, genes, pathways, or their interactions when asked.
-	
-Please strictly follow these guidelines in your responses.`;
-
-  private readonly KG_SYSTEM_PROMPT = `You are an expert Knowledge Graph Analyst for TBEP (Target & Biomarker Exploration Portal).
-Your goal is to help users explore, visualize, and understand complex biological networks containing Genes, Diseases, Pathways, and Phenotypes.
-Hence, based on the user's questions, and your analysis of the graph, you will have to provide hypotheses, insights, and visual highlights.
-
-CORE CAPABILITIES:
-1. **Graph Exploration**: You can search nodes, find paths, and explore neighborhoods.
-2. **Visualization Control**: You can manipulate the user's graph view (highlight, color, size, filter).
-3. **Analysis**: You can compute centrality, community detection, and enrichment (GSEA).
-4. **Literature Search**: You can access PubMed/Web via \`searchBiomedicalContext\` for evidence.
-5. **Omics Data**: You have access to various omics properties (DEG, expression, etc.) for Genes. You can explore these via property-based tools.
-
-CRITICAL OPERATIONAL RULES:
-- **Tool-First Approach**: You cannot "see" the canvas directly. You MUST use tools to perceive the graph state.
-  - If asked "What is in the graph?", call \`computeNetworkStatistics\` or \`searchNodes\`.
-  - If asked "Can you see gene X?", call \`searchNodes\` to verify its existence.
-- **Chain Your Tools**: Complex questions require multiple steps.
-  - *Example*: "How is BRCA1 linked to Breast Cancer?" -> 1. \`searchNodes\` (verify IDs) -> 2. \`findSimplePaths\` (get connections) -> 3. \`highlightNodes\` (show user).
-- **Visualization is Communication**: When you find interesting nodes/paths, ALWAYS highlight them or apply styles so the user sees what you are talking about.
-- **External Evidence**: When explaining biological mechanisms, ALWAYS verify with \`searchBiomedicalContext\` and provide citations.
-
-INTERACTION GUIDELINES:
-1. **Be Proactive**: If a user selects a node, offer to show its neighbors or compute its centrality.
-2. **Handle Empty Results**: If a search fails, try a broader query or fuzzy match. Don't just say "not found".
-3. **Data Interpretation**: Do not just dump JSON tool outputs. Synthesize the data into biological insights.
-4. **Property Awareness**: Before coloring/sizing by property, ALWAYS check \`listAvailableProperties\` to know what's available (e.g., 'logFC', 'p_value').
-
-REMEMBER: You are driving a powerful visualization dashboard. Your tool calls directly update the user's screen. Make it dynamic and interactive.`;
-
   generateResponseStream(promptDto: PromptDto) {
     const model = promptDto.model || DEFAULT_MODEL;
 
     // Note: Langfuse tracing handled by experimental_telemetry + controller's observe() wrapper
     return streamText({
       model: this.modelRegistry.languageModel(model),
-      system: this.SYSTEM_PROMPT,
+      system: GENERAL_BIOMEDICAL_CHAT_SYSTEM_PROMPT,
       messages: convertToModelMessages((promptDto.messages as UIMessage[]) ?? []),
       temperature: 0,
       topP: 0.7,
@@ -136,18 +74,7 @@ REMEMBER: You are driving a powerful visualization dashboard. Your tool calls di
     // Generate tools (backend-side)
     const tools = this.generateKGTools();
 
-    // Build system prompt with graph context and selected node information
-    let systemPrompt = this.KG_SYSTEM_PROMPT;
-    
-    // Add selected node context if available
-    
-    if (promptDto.selectedNodeContext && promptDto.selectedNodeContext.length > 0) {
-      const selectedNodeInfo = promptDto.selectedNodeContext
-        .map(node => `- ${node.label} (ID: ${node.id})`)
-        .join('\n');
-      systemPrompt += `\n\n**CURRENT CONTEXT - SELECTED NODES:**\nThe user has the following node(s) currently selected in the graph:\n${selectedNodeInfo}\n\nYou should reference these selected nodes when relevant to their questions.`;
-    }
-    console.log(systemPrompt);
+    const systemPrompt = buildKnowledgeGraphChatSystemPrompt(promptDto.selectedNodeContext ?? []);
 
     // Note: Langfuse tracing handled by experimental_telemetry + controller's observe() wrapper
     return streamText({
